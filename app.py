@@ -9,14 +9,6 @@ from google.analytics.admin import AnalyticsAdminServiceClient
 import google.generativeai as genai
 import time
 
-# ... import kodları ...
-import google.generativeai as genai
-
-# BU SATIRI EKLEYİN (Geçici Kontrol İçin):
-st.warning(f"Robotun Kullandığı Email: {st.secrets['gcp_service_account']['client_email']}")
-
-# ... kodun kalanı ...
-
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
@@ -68,6 +60,7 @@ def get_ga4_properties():
     try:
         admin_client = AnalyticsAdminServiceClient(credentials=creds)
         results = []
+        # Hesap özetlerini listele
         for account in admin_client.list_account_summaries(parent=""):
             for property_summary in account.property_summaries:
                 results.append({
@@ -75,7 +68,10 @@ def get_ga4_properties():
                     "GA4_Property_ID": property_summary.property.split('/')[-1]
                 })
         return pd.DataFrame(results)
-    except: return pd.DataFrame()
+    except Exception as e:
+        # !!! BURASI DÜZELTİLDİ: HATAYI EKRANA BAS !!!
+        st.error(f"🚨 KRİTİK HATA: {e}") 
+        return pd.DataFrame()
 
 def get_gemini_json(prompt):
     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -128,7 +124,10 @@ def export_to_sheet(df, prompt):
 # 1. Yan Menü
 with st.sidebar:
     st.title("PlanB 💬")
-    st.caption("Veri Ajanı")
+    st.caption("Veri Ajanı v1.1")
+    
+    # Hata Ayıklama Modu
+    st.info(f"📧 Robot Maili: {st.secrets['gcp_service_account']['client_email']}")
     
     df_brands = get_ga4_properties()
     selected_brand_data = None
@@ -144,10 +143,10 @@ with st.sidebar:
             st.session_state.messages = []
             st.rerun()
     else:
-        st.warning("⚠️ Marka bulunamadı. Robot mailini GA4 hesaplarına eklediniz mi?")
+        st.warning("⚠️ Markalar Listelenemedi! (Hata detayına bakın)")
 
 # 2. Sohbet Akışı
-st.subheader("Veri Asistanı")
+st.subheader("PlanB Veri Asistanı")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -171,6 +170,7 @@ if prompt := st.chat_input("Soru sor... (Örn: Geçen ay en çok satan 5 ürün?
                         if not df.empty:
                             summary = get_gemini_summary(df, prompt)
                             st.markdown(summary)
+                            # Tabloyu buraya basıyoruz
                             st.dataframe(df, use_container_width=True, hide_index=True)
                             
                             st.session_state.messages.append({"role": "assistant", "content": summary})
@@ -178,10 +178,8 @@ if prompt := st.chat_input("Soru sor... (Örn: Geçen ay en çok satan 5 ürün?
                             st.session_state.last_prompt = prompt
                         else:
                             st.warning("Veri bulunamadı.")
-                except Exception as e:
-        # HATAYI EKRANA BAS Kİ GÖRELİM
-        st.error(f"🚨 HATA DETAYI: {e}") 
-        return pd.DataFrame()
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
 
 # 4. Export Butonu (Son veri varsa göster)
 if st.session_state.last_data is not None:
