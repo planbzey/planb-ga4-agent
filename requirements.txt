@@ -3,5 +3,5 @@ pandas
 google-analytics-data
 google-analytics-admin
 gspread
-google-generativeai
 google-auth
+google-generativeai>=0.7.0
