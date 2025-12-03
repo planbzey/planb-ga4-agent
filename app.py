@@ -12,12 +12,12 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS (TASARIM VE RENK DÜZELTMELERİ) ---
+# --- CSS (GÜÇLENDİRİLMİŞ SİYAH TEMA) ---
 st.markdown("""
 <style>
     /* 1. SOHBET BALONLARI (Okunabilirlik Ayarı) */
     .stChatMessage {
-        background-color: #ffffff !important; /* Arka plan BEYAZ */
+        background-color: #ffffff !important;
         border-radius: 15px;
         padding: 15px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -25,8 +25,20 @@ st.markdown("""
         border: 1px solid #e0e0e0;
     }
     
-    /* Balonun içindeki tüm yazıları SİYAH yap (Kritik Düzeltme) */
-    .stChatMessage p, .stChatMessage div, .stChatMessage span, .stChatMessage h1, .stChatMessage h2, .stChatMessage h3, .stChatMessage li {
+    /* Balonun içindeki TÜM metin elementlerini SİYAH yap */
+    [data-testid="stChatMessage"] p, 
+    [data-testid="stChatMessage"] span, 
+    [data-testid="stChatMessage"] div, 
+    [data-testid="stChatMessage"] h1, 
+    [data-testid="stChatMessage"] h2, 
+    [data-testid="stChatMessage"] h3, 
+    [data-testid="stChatMessage"] h4,
+    [data-testid="stChatMessage"] h5,
+    [data-testid="stChatMessage"] h6,
+    [data-testid="stChatMessage"] li,
+    [data-testid="stChatMessage"] strong,
+    [data-testid="stChatMessage"] td,
+    [data-testid="stChatMessage"] th {
         color: #000000 !important;
     }
     
@@ -106,45 +118,41 @@ def get_ga4_properties():
                 })
         return pd.DataFrame(results)
     except Exception as e:
-        # Yan menü siyah olduğu için hatayı beyaz yazdıralım
         st.sidebar.error(f"Hata: {e}") 
         return pd.DataFrame()
 
+# --- DÜZELTME 1: JSON Oluşturucuya Güvenlik Ayarı Eklendi ---
 def get_gemini_json(prompt):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Güvenlik Kilidini Aç
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+    
     sys_prompt = """Sen GA4 Data API uzmanısın. Kullanıcı sorusunu JSON'a çevir. 
     Metrics, dimensions, dateRanges, limit kullan.
     Sadece JSON döndür. Markdown yok.
+    Ciro/Revenue sorularında metric olarak 'totalRevenue' veya 'purchaseRevenue' kullan.
     Örnek: {"date_ranges": [{"start_date": "30daysAgo", "end_date": "yesterday"}], "dimensions": [{"name": "itemAccountName"}], "metrics": [{"name": "itemsPurchased"}]}
     """
     try:
         res = model.generate_content(f"{sys_prompt}\nSoru: {prompt}")
-        return json.loads(res.text.replace("```json", "").replace("```", "").strip())
-    except: return None
+        cleaned_json = res.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(cleaned_json)
+    except: 
+        return None
 
+# --- DÜZELTME 2: Yorumcuya Güvenlik Ayarı Eklendi ---
 def get_gemini_summary(df, prompt):
-    """Veriyi yorumlayan yapay zeka (GÜVENLİK AYARLARI GEVŞETİLDİ)"""
-    
-    # Güvenlik ayarlarını "Hepsine izin ver" moduna alıyoruz
     safety_settings = [
-        {
-            "category": "HARM_CATEGORY_HARASSMENT",
-            "threshold": "BLOCK_NONE"
-        },
-        {
-            "category": "HARM_CATEGORY_HATE_SPEECH",
-            "threshold": "BLOCK_NONE"
-        },
-        {
-            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            "threshold": "BLOCK_NONE"
-        },
-        {
-            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-            "threshold": "BLOCK_NONE"
-        },
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
-
     model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
     
     data_sample = df.head(10).to_string()
@@ -154,8 +162,7 @@ def get_gemini_summary(df, prompt):
         res = model.generate_content(sys_prompt)
         return res.text
     except Exception as e:
-        # Eğer yine de hata verirse boş dönmek yerine hatayı yaz
-        return f"⚠️ Veriyi çektim ama yorumlayamadım. İşte ham veri: (Hata: {e})"
+        return f"⚠️ Veriyi çektim ama yorumlayamadım. İşte tablo:"
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -188,14 +195,16 @@ def export_to_sheet(df, prompt):
 # 1. YAN MENÜ
 with st.sidebar:
     try:
+        # Lütfen GitHub'a "pb-amblem-blk (1).png" adıyla yüklediğinden emin ol
+        # Eğer "logo.png" yaptıysan burayı "logo.png" olarak değiştir
         st.image("logo.png", use_container_width=True) 
     except:
         st.caption("PlanB Logo")
 
     st.markdown("---")
     
-    # Debug bilgisi
-    st.caption(f"Bot: {st.secrets['gcp_service_account']['client_email']}")
+    # Debug bilgisi (İşler düzelince silebilirsin)
+    # st.caption(f"Bot: {st.secrets['gcp_service_account']['client_email']}")
     
     df_brands = get_ga4_properties()
     selected_brand_data = None
@@ -220,7 +229,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. INPUT VE İŞLEM
+# 3. INPUT
 if prompt := st.chat_input("Bir soru sor..."):
     if selected_brand_data is None:
         st.error("Lütfen sol menüden bir marka seçin.")
@@ -231,23 +240,16 @@ if prompt := st.chat_input("Bir soru sor..."):
 
         with st.chat_message("assistant"):
             with st.spinner("PlanB Ajanı düşünüyor..."):
-                # 1. JSON oluştur
                 query_json = get_gemini_json(prompt)
                 
                 if query_json:
                     try:
-                        # 2. GA4 Verisini Çek
                         df = run_ga4_report(str(selected_brand_data['GA4_Property_ID']), query_json)
-                        
                         if not df.empty:
-                            # 3. Önce veriyi yorumlat (Yeni Güvenli Fonksiyonla)
                             summary = get_gemini_summary(df, prompt)
                             st.markdown(summary)
-                            
-                            # 4. TABLOYU KESİN GÖSTER (Metinden bağımsız)
                             st.dataframe(df, use_container_width=True, hide_index=True)
                             
-                            # Hafızaya at
                             st.session_state.messages.append({
                                 "role": "assistant", 
                                 "content": summary + "\n\n*(Tablo yukarıda gösterildi)*"
@@ -255,14 +257,13 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            msg = "📉 GA4'e bağlandım ama bu tarih/kriter için veri '0' döndü."
+                            msg = "Bu tarih/kriter için GA4 verisi '0' döndü."
                             st.warning(msg)
                             st.session_state.messages.append({"role": "assistant", "content": msg})
-                            
                     except Exception as e:
-                        st.error(f"Hata oluştu: {e}")
+                        st.error(f"Hata: {e}")
                 else:
-                    st.error("Sorunuzu teknik dile çeviremedim. Biraz daha basit sorar mısın?")
+                    st.error("Sorunuzu teknik dile çeviremedim. (API Güvenlik filtresi olabilir, tekrar deneyin).")
 
 # 4. EXPORT
 if st.session_state.last_data is not None:
