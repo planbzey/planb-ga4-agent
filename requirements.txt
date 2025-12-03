@@ -1,0 +1,7 @@
+streamlit
+pandas
+google-analytics-data
+google-analytics-admin
+gspread
+google-generativeai
+google-auth
