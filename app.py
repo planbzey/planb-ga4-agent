@@ -14,7 +14,7 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS TASARIM ---
+# --- CSS ---
 st.markdown("""
 <style>
     .stChatMessage {
@@ -95,8 +95,8 @@ safety_config = [
 ]
 
 def get_gemini_json(prompt):
-    # BURASI DEĞİŞTİ: 'gemini-pro' (Ücretsiz ve Stabil)
-    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
+    # KÜTÜPHANE GÜNCELLENDİĞİ İÇİN ARTIK FLASH ÇALIŞIR
+    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
@@ -125,8 +125,7 @@ def get_gemini_json(prompt):
         return None, str(e)
 
 def get_gemini_summary(df, prompt):
-    # BURASI DEĞİŞTİ: 'gemini-pro'
-    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
+    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     data_sample = df.head(10).to_string()
     sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
     try:
@@ -213,7 +212,7 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            st.warning("Bu tarih için veri '0' döndü.")
+                            st.warning("Bu tarih için veri '0' döndü. (Tarih gelecekte olabilir mi?)")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
                 else:
