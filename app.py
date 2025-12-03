@@ -14,7 +14,7 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS ---
+# --- CSS TASARIM ---
 st.markdown("""
 <style>
     .stChatMessage {
@@ -86,7 +86,7 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# Güvenlik Ayarları
+# Güvenlik Ayarları (Hepsini kapatıyoruz ki Ciro sorusuna takılmasın)
 safety_config = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -95,8 +95,8 @@ safety_config = [
 ]
 
 def get_gemini_json(prompt):
-    # KÜTÜPHANE GÜNCELLENDİĞİ İÇİN ARTIK FLASH ÇALIŞIR
-    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
+    # DÜZELTME: KESİN OLARAK 'gemini-pro' KULLANILIYOR
+    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
     
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
@@ -107,7 +107,7 @@ def get_gemini_json(prompt):
     RULES:
     1. Even if date is FUTURE (2025, 2026), generate the JSON. Do not verify existence.
     2. If specific day (e.g. "2 Dec"), start_date = end_date.
-    3. Output ONLY valid JSON.
+    3. Output ONLY valid JSON. Do not use Markdown blocks.
     
     Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
     
@@ -117,15 +117,21 @@ def get_gemini_json(prompt):
     try:
         res = model.generate_content(f"{sys_prompt}\nReq: {prompt}")
         raw_text = res.text
-        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        
+        # --- GÜÇLENDİRİLMİŞ AYIKLAMA ---
+        # Metnin içindeki İLK süslü parantez { ile SON süslü parantez } arasını alır.
+        match = re.search(r"\{[\s\S]*\}", raw_text)
+        
         if match:
-            return json.loads(match.group(0)), raw_text
+            clean_json = match.group(0)
+            return json.loads(clean_json), raw_text
         return None, raw_text
     except Exception as e:
         return None, str(e)
 
 def get_gemini_summary(df, prompt):
-    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
+    # DÜZELTME: 'gemini-pro'
+    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
     data_sample = df.head(10).to_string()
     sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
     try:
@@ -212,12 +218,12 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            st.warning("Bu tarih için veri '0' döndü. (Tarih gelecekte olabilir mi?)")
+                            st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
                 else:
-                    st.error("⚠️ AI JSON Üretemedi.")
-                    with st.expander("Debug Bilgisi"):
+                    st.error("⚠️ AI JSON Üretemedi. (Debug Kutusuna Bakın)")
+                    with st.expander("Debug Bilgisi (Hata Nedeni)"):
                         st.text(raw_response)
 
 if st.session_state.last_data is not None:
