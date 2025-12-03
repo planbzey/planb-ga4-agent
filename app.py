@@ -72,7 +72,6 @@ if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = ""
 
 # --- FONKSİYONLAR ---
-# Cache'i kaldırdım ki anlık hatalarda takılı kalmasın
 def get_ga4_properties():
     try:
         admin_client = AnalyticsAdminServiceClient(credentials=creds)
@@ -87,7 +86,7 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# Güvenlik Ayarları (Full Açık)
+# Güvenlik Ayarları
 safety_config = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -96,26 +95,28 @@ safety_config = [
 ]
 
 def get_gemini_json(prompt):
-    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
+    # BURASI DEĞİŞTİ: 'gemini-pro' (Ücretsiz ve Stabil)
+    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
     
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
     
-    RULES:
-    1. Convert user prompt to GA4 API JSON.
-    2. Even if the date is in the FUTURE (e.g. 2025, 2026), generate the JSON for that specific date range. Do not complain.
-    3. If user says specific day (e.g. "2 Dec"), start_date and end_date are the same.
-    4. Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
-    5. Output ONLY JSON. No text.
+    Task: Convert user question to JSON.
     
-    Example: {{"date_ranges": [{{"start_date": "2025-11-01", "end_date": "2025-11-30"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
+    RULES:
+    1. Even if date is FUTURE (2025, 2026), generate the JSON. Do not verify existence.
+    2. If specific day (e.g. "2 Dec"), start_date = end_date.
+    3. Output ONLY valid JSON.
+    
+    Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
+    
+    Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
     try:
         res = model.generate_content(f"{sys_prompt}\nReq: {prompt}")
         raw_text = res.text
-        # Regex ile JSON avla
         match = re.search(r"\{.*\}", raw_text, re.DOTALL)
         if match:
             return json.loads(match.group(0)), raw_text
@@ -124,9 +125,10 @@ def get_gemini_json(prompt):
         return None, str(e)
 
 def get_gemini_summary(df, prompt):
-    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
+    # BURASI DEĞİŞTİ: 'gemini-pro'
+    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
     data_sample = df.head(10).to_string()
-    sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nÖzetle. Rakamları yuvarla."
+    sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
     try:
         res = model.generate_content(sys_prompt)
         return res.text
@@ -175,7 +177,6 @@ with st.sidebar:
         st.success(f"✅ {selected_brand}")
         st.markdown("---")
         
-        # SİSTEMİ SIFIRLA BUTONU
         if st.button("🧹 SİSTEMİ SIFIRLA"):
             st.session_state.clear()
             st.rerun()
@@ -212,7 +213,7 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            st.warning("Bu tarih için veri '0' döndü. (Tarih gelecekte olabilir mi?)")
+                            st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
                 else:
