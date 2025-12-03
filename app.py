@@ -12,45 +12,58 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS (ÖZEL SİYAH TASARIM) ---
+# --- CSS (TASARIM VE RENK DÜZELTMELERİ) ---
 st.markdown("""
 <style>
-    /* Sohbet Balonları */
+    /* 1. SOHBET BALONLARI (Okunabilirlik Ayarı) */
     .stChatMessage {
-        background-color: #ffffff;
+        background-color: #ffffff !important; /* Arka plan BEYAZ */
         border-radius: 15px;
-        padding: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        padding: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 10px;
+        border: 1px solid #e0e0e0;
     }
     
-    /* YAN MENÜ (SIDEBAR) FULL SİYAH */
+    /* Balonun içindeki tüm yazıları SİYAH yap (Kritik Düzeltme) */
+    .stChatMessage p, .stChatMessage div, .stChatMessage span, .stChatMessage h1, .stChatMessage h2, .stChatMessage h3, .stChatMessage li {
+        color: #000000 !important;
+    }
+    
+    /* Kullanıcı ikonunu ve Asistan ikonunu belirginleştir */
+    .stChatMessage .stAvatar {
+        background-color: #ff4b4b !important;
+        color: white !important;
+    }
+
+    /* 2. YAN MENÜ (SIDEBAR) FULL SİYAH */
     [data-testid="stSidebar"] {
         background-color: #000000;
     }
     
     /* Yan menüdeki tüm yazıları BEYAZ yap */
-    [data-testid="stSidebar"] * {
+    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span {
         color: #ffffff !important;
     }
     
-    /* Yan menüdeki Selectbox (Marka Seçimi) arka planını düzelt */
-    [data-testid="stSidebar"] .stSelectbox > div > div {
-        background-color: #333333;
-        color: white;
+    /* Selectbox (Açılır Menü) Okunabilirlik Ayarı */
+    [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
+        background-color: #333333 !important;
+        color: white !important;
+        border: 1px solid #555555 !important;
     }
     
-    /* Butonları PlanB Kırmızısı Yap */
+    /* Dropdown açıldığında çıkan listenin rengi */
+    ul[data-baseweb="menu"] {
+        background-color: #222222 !important;
+    }
+    
+    /* 3. GENEL BUTONLAR */
     .stButton>button {
         background-color: #ff4b4b;
-        color: white;
+        color: white !important;
         border: none;
-    }
-
-    /* Uyarı kutularını (Warning/Success) Sidebar içinde şıklaştır */
-    [data-testid="stSidebar"] .stAlert {
-        background-color: #222222 !important;
-        color: #eeeeee !important;
-        border: 1px solid #444444;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -93,6 +106,7 @@ def get_ga4_properties():
                 })
         return pd.DataFrame(results)
     except Exception as e:
+        # Yan menü siyah olduğu için hatayı beyaz yazdıralım
         st.sidebar.error(f"Hata: {e}") 
         return pd.DataFrame()
 
@@ -143,9 +157,8 @@ def export_to_sheet(df, prompt):
 
 # --- ARAYÜZ ---
 
-# 1. YAN MENÜ (SİYAH TASARIM)
+# 1. YAN MENÜ
 with st.sidebar:
-    # LOGO BURAYA GELİYOR
     try:
         st.image("logo.png", use_container_width=True) 
     except:
@@ -153,7 +166,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # Debug amaçlı mail (Çalışınca silebilirsin)
+    # Debug bilgisi
     st.caption(f"Bot: {st.secrets['gcp_service_account']['client_email']}")
     
     df_brands = get_ga4_properties()
@@ -179,9 +192,8 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. INPUT VE İŞLEM
+# 3. INPUT
 if prompt := st.chat_input("Bir soru sor..."):
-    # DÜZELTME BURADA YAPILDI: "if not selected_brand_data" YERİNE "is None" KULLANILDI
     if selected_brand_data is None:
         st.error("Lütfen sol menüden bir marka seçin.")
     else:
