@@ -123,11 +123,39 @@ def get_gemini_json(prompt):
     except: return None
 
 def get_gemini_summary(df, prompt):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    """Veriyi yorumlayan yapay zeka (GÜVENLİK AYARLARI GEVŞETİLDİ)"""
+    
+    # Güvenlik ayarlarını "Hepsine izin ver" moduna alıyoruz
+    safety_settings = [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE"
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE"
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE"
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE"
+        },
+    ]
+
+    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+    
     data_sample = df.head(10).to_string()
-    sys_prompt = f"Kullanıcı şunu sordu: '{prompt}'. Elimdeki GA4 verisi şu:\n{data_sample}\n\nBu veriye bakarak kullanıcıya 1-2 cümlelik samimi, net bir özet cevap ver. Rakamları yuvarlayabilirsin."
-    res = model.generate_content(sys_prompt)
-    return res.text
+    sys_prompt = f"Kullanıcı şunu sordu: '{prompt}'. Elimdeki GA4 verisi şu:\n{data_sample}\n\nBu veriye bakarak kullanıcıya 1-2 cümlelik samimi, net bir özet cevap ver. Rakamları yuvarlayabilirsin. Asla yorum yapmaktan kaçınma."
+    
+    try:
+        res = model.generate_content(sys_prompt)
+        return res.text
+    except Exception as e:
+        # Eğer yine de hata verirse boş dönmek yerine hatayı yaz
+        return f"⚠️ Veriyi çektim ama yorumlayamadım. İşte ham veri: (Hata: {e})"
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -192,7 +220,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. INPUT
+# 3. INPUT VE İŞLEM
 if prompt := st.chat_input("Bir soru sor..."):
     if selected_brand_data is None:
         st.error("Lütfen sol menüden bir marka seçin.")
@@ -203,22 +231,38 @@ if prompt := st.chat_input("Bir soru sor..."):
 
         with st.chat_message("assistant"):
             with st.spinner("PlanB Ajanı düşünüyor..."):
+                # 1. JSON oluştur
                 query_json = get_gemini_json(prompt)
+                
                 if query_json:
                     try:
+                        # 2. GA4 Verisini Çek
                         df = run_ga4_report(str(selected_brand_data['GA4_Property_ID']), query_json)
+                        
                         if not df.empty:
+                            # 3. Önce veriyi yorumlat (Yeni Güvenli Fonksiyonla)
                             summary = get_gemini_summary(df, prompt)
                             st.markdown(summary)
+                            
+                            # 4. TABLOYU KESİN GÖSTER (Metinden bağımsız)
                             st.dataframe(df, use_container_width=True, hide_index=True)
                             
-                            st.session_state.messages.append({"role": "assistant", "content": summary})
+                            # Hafızaya at
+                            st.session_state.messages.append({
+                                "role": "assistant", 
+                                "content": summary + "\n\n*(Tablo yukarıda gösterildi)*"
+                            })
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            st.warning("Veri bulunamadı.")
+                            msg = "📉 GA4'e bağlandım ama bu tarih/kriter için veri '0' döndü."
+                            st.warning(msg)
+                            st.session_state.messages.append({"role": "assistant", "content": msg})
+                            
                     except Exception as e:
-                        st.error(f"Hata: {e}")
+                        st.error(f"Hata oluştu: {e}")
+                else:
+                    st.error("Sorunuzu teknik dile çeviremedim. Biraz daha basit sorar mısın?")
 
 # 4. EXPORT
 if st.session_state.last_data is not None:
