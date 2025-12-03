@@ -9,6 +9,14 @@ from google.analytics.admin import AnalyticsAdminServiceClient
 import google.generativeai as genai
 import time
 
+# ... import kodları ...
+import google.generativeai as genai
+
+# BU SATIRI EKLEYİN (Geçici Kontrol İçin):
+st.warning(f"Robotun Kullandığı Email: {st.secrets['gcp_service_account']['client_email']}")
+
+# ... kodun kalanı ...
+
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
