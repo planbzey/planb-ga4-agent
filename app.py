@@ -85,9 +85,11 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUEL AI İSTEĞİ (Kütüphanesiz) ---
+# --- MANUEL AI İSTEĞİ (DÜZELTİLDİ: gemini-pro) ---
 def ask_gemini_raw(prompt_text):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # BURASI DEĞİŞTİ: 1.5-flash yerine 'gemini-pro' kullanıyoruz. Kesin çalışır.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -98,12 +100,14 @@ def ask_gemini_raw(prompt_text):
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
         ]
     }
+    
     try:
         response = requests.post(url, headers=headers, json=data)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"Error: {response.text}"
+            # Hata dönerse ekrana basalım
+            return f"API Error: {response.text}"
     except Exception as e:
         return f"Request Failed: {e}"
 
@@ -116,8 +120,8 @@ def get_gemini_json(prompt):
     RULES:
     1. Even if date is FUTURE (2025, 2026), generate the JSON.
     2. If specific day (e.g. "2 Dec"), start_date = end_date.
-    3. Output ONLY valid JSON. 
-    4. IMPORTANT: JSON keys must be "date_ranges", "dimensions", "metrics".
+    3. Output ONLY JSON. 
+    4. Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
     
     Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
@@ -128,21 +132,20 @@ def get_gemini_json(prompt):
     
     # --- GÜÇLENDİRİLMİŞ JSON AYIKLAMA ---
     try:
-        # 1. En geniş kapsamlı süslü parantez aralığını bul
+        # 1. JSON Regex
         match = re.search(r"\{[\s\S]*\}", raw_text)
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
             
-            # 2. Kritik anahtarları kontrol et (Eksikse tamamla)
+            # 2. Eksik anahtar kontrolü
             if "date_ranges" not in parsed:
-                 # Hata varsa varsayılan olarak bugünü ata
                  parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
             
             return parsed, raw_text
         return None, raw_text
     except Exception as e:
-        return None, f"JSON Parse Error: {e} | Raw: {raw_text}"
+        return None, f"Hata: {raw_text}"
 
 def get_gemini_summary(df, prompt):
     data_sample = df.head(10).to_string()
@@ -239,7 +242,7 @@ if prompt := st.chat_input("Bir soru sor..."):
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
                         with st.expander("Teknik Detay"):
-                             st.json(query_json) # Hangi JSON ile hata aldığımızı görelim
+                             st.json(query_json)
                 else:
                     st.error("⚠️ AI JSON Üretemedi.")
                     with st.expander("Debug Bilgisi"):
