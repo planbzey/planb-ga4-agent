@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import gspread
 import re
+import datetime 
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest
@@ -86,7 +87,7 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- GÜVENLİK AYARLARI (BLOCK_NONE) ---
+# --- GÜVENLİK AYARLARI ---
 safety_config = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -95,34 +96,41 @@ safety_config = [
 ]
 
 def get_gemini_json(prompt):
-    # Bu model daha uyumlu, JSON Mode kapalı, Regex açık
     model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     
-    sys_prompt = """Sen GA4 API uzmanısın. Görevin soruyu JSON'a çevirmek.
-    Kural: Sadece JSON döndür. Markdown (```json) kullanma.
-    Metrikler: totalRevenue, purchaseRevenue, itemsPurchased, sessions, activeUsers, screenPageViews.
-    Örnek Cevap: {"date_ranges": [{"start_date": "30daysAgo", "end_date": "yesterday"}], "dimensions": [{"name": "eventName"}], "metrics": [{"name": "eventCount"}]}
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    
+    # --- PROMPT GÜNCELLENDİ: TEK GÜN MANTIĞI EKLENDİ ---
+    sys_prompt = f"""You are a GA4 API expert.
+    TODAY'S DATE: {today_str}.
+    
+    Your Goal: Convert user question to JSON.
+    
+    CRITICAL DATE RULES:
+    1. If user asks for a specific SINGLE DAY (e.g. "2 Aralık", "December 2nd"), set 'start_date' and 'end_date' to the SAME date (e.g., "2025-12-02").
+    2. If user asks for a MONTH (e.g. "Kasım 2025"), use full month range (e.g. "2025-11-01" to "2025-11-30").
+    3. Turkish Months Mapping: Ocak=01, Şubat=02, Mart=03, Nisan=04, Mayıs=05, Haziran=06, Temmuz=07, Ağustos=08, Eylül=09, Ekim=10, Kasım=11, Aralık=12.
+    
+    Metrics Mapping:
+    - Ciro, Gelir -> totalRevenue, purchaseRevenue
+    - Satış Adedi -> itemsPurchased
+    - Ziyaretçi -> activeUsers
+    - Görüntülenme -> screenPageViews
+    
+    Output ONLY JSON.
+    Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
     try:
-        # Soruyu sor
-        res = model.generate_content(f"{sys_prompt}\nSoru: {prompt}")
+        res = model.generate_content(f"{sys_prompt}\nUser Question: {prompt}")
         raw_text = res.text
-        
-        # --- Cımbızlama Yöntemi (Regex) ---
-        # Metnin içindeki { ... } kısmını bulur.
         match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-        
         if match:
-            json_str = match.group(0)
-            return json.loads(json_str)
+            return json.loads(match.group(0)), raw_text
         else:
-            # HATA AYIKLAMA: JSON bulamazsa ne dediğini döndür
-            print(f"DEBUG - AI Cevabı: {raw_text}")
-            return None
+            return None, raw_text
     except Exception as e:
-        print(f"DEBUG - Hata: {e}")
-        return None
+        return None, str(e)
 
 def get_gemini_summary(df, prompt):
     model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
@@ -197,7 +205,7 @@ if prompt := st.chat_input("Bir soru sor..."):
 
         with st.chat_message("assistant"):
             with st.spinner("Analiz..."):
-                query_json = get_gemini_json(prompt)
+                query_json, raw_response = get_gemini_json(prompt)
                 
                 if query_json:
                     try:
@@ -213,12 +221,11 @@ if prompt := st.chat_input("Bir soru sor..."):
                         else:
                             st.warning("Veri '0' döndü.")
                     except Exception as e:
-                        # !!! HATA GÖSTERİCİ !!!
                         st.error(f"GA4 Hatası: {e}")
-                        # Hatanın detayına bakarak sorunu anlayabiliriz
                 else:
-                    # JSON üretilemediyse nedenini ekrana basarız
-                    st.error("⚠️ AI Cevabı Anlaşılamadı. (Tekrar deneyin)")
+                    st.error("⚠️ AI Cevabı Anlaşılamadı.")
+                    with st.expander("🕵️‍♂️ Debug"):
+                        st.code(raw_response, language="text")
 
 if st.session_state.last_data is not None:
     if st.button("📂 Sheets'e Aktar"):
