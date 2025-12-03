@@ -14,7 +14,7 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS ---
+# --- CSS TASARIM ---
 st.markdown("""
 <style>
     .stChatMessage {
@@ -60,7 +60,7 @@ try:
                 "https://www.googleapis.com/auth/analytics.edit"]
     )
 except Exception as e:
-    st.error(f"Ayar Hatası: {e}")
+    st.error(f"Sistem Ayarları Eksik: {e}")
     st.stop()
 
 # --- HAFIZA ---
@@ -72,7 +72,7 @@ if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = ""
 
 # --- FONKSİYONLAR ---
-@st.cache_data(ttl=300)
+# Cache'i kaldırdım ki anlık hatalarda takılı kalmasın
 def get_ga4_properties():
     try:
         admin_client = AnalyticsAdminServiceClient(credentials=creds)
@@ -87,7 +87,7 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- GÜVENLİK AYARLARI ---
+# Güvenlik Ayarları (Full Açık)
 safety_config = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -100,47 +100,38 @@ def get_gemini_json(prompt):
     
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
-    # --- PROMPT GÜNCELLENDİ: TEK GÜN MANTIĞI EKLENDİ ---
-    sys_prompt = f"""You are a GA4 API expert.
-    TODAY'S DATE: {today_str}.
+    sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
     
-    Your Goal: Convert user question to JSON.
+    RULES:
+    1. Convert user prompt to GA4 API JSON.
+    2. Even if the date is in the FUTURE (e.g. 2025, 2026), generate the JSON for that specific date range. Do not complain.
+    3. If user says specific day (e.g. "2 Dec"), start_date and end_date are the same.
+    4. Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
+    5. Output ONLY JSON. No text.
     
-    CRITICAL DATE RULES:
-    1. If user asks for a specific SINGLE DAY (e.g. "2 Aralık", "December 2nd"), set 'start_date' and 'end_date' to the SAME date (e.g., "2025-12-02").
-    2. If user asks for a MONTH (e.g. "Kasım 2025"), use full month range (e.g. "2025-11-01" to "2025-11-30").
-    3. Turkish Months Mapping: Ocak=01, Şubat=02, Mart=03, Nisan=04, Mayıs=05, Haziran=06, Temmuz=07, Ağustos=08, Eylül=09, Ekim=10, Kasım=11, Aralık=12.
-    
-    Metrics Mapping:
-    - Ciro, Gelir -> totalRevenue, purchaseRevenue
-    - Satış Adedi -> itemsPurchased
-    - Ziyaretçi -> activeUsers
-    - Görüntülenme -> screenPageViews
-    
-    Output ONLY JSON.
-    Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
+    Example: {{"date_ranges": [{{"start_date": "2025-11-01", "end_date": "2025-11-30"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
     try:
-        res = model.generate_content(f"{sys_prompt}\nUser Question: {prompt}")
+        res = model.generate_content(f"{sys_prompt}\nReq: {prompt}")
         raw_text = res.text
+        # Regex ile JSON avla
         match = re.search(r"\{.*\}", raw_text, re.DOTALL)
         if match:
             return json.loads(match.group(0)), raw_text
-        else:
-            return None, raw_text
+        return None, raw_text
     except Exception as e:
         return None, str(e)
 
 def get_gemini_summary(df, prompt):
     model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     data_sample = df.head(10).to_string()
-    sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nÖzetle. Finansal yorum yap."
+    sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nÖzetle. Rakamları yuvarla."
     try:
         res = model.generate_content(sys_prompt)
         return res.text
     except:
-        return "⚠️ Veri çekildi."
+        return "⚠️ Veri alındı."
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -183,11 +174,13 @@ with st.sidebar:
         selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
         st.success(f"✅ {selected_brand}")
         st.markdown("---")
-        if st.button("🗑️ Temizle"):
-            st.session_state.messages = []
+        
+        # SİSTEMİ SIFIRLA BUTONU
+        if st.button("🧹 SİSTEMİ SIFIRLA"):
+            st.session_state.clear()
             st.rerun()
     else:
-        st.error("Marka yok. Robotu GA4'e ekle.")
+        st.error("Marka bulunamadı. Robotu ekleyin.")
 
 st.subheader("PlanB GA4 Whisperer")
 
@@ -197,7 +190,7 @@ for message in st.session_state.messages:
 
 if prompt := st.chat_input("Bir soru sor..."):
     if selected_brand_data is None:
-        st.error("Marka seçin.")
+        st.error("Lütfen marka seçin.")
     else:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -219,13 +212,13 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            st.warning("Veri '0' döndü.")
+                            st.warning("Bu tarih için veri '0' döndü. (Tarih gelecekte olabilir mi?)")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
                 else:
-                    st.error("⚠️ AI Cevabı Anlaşılamadı.")
-                    with st.expander("🕵️‍♂️ Debug"):
-                        st.code(raw_response, language="text")
+                    st.error("⚠️ AI JSON Üretemedi.")
+                    with st.expander("Debug Bilgisi"):
+                        st.text(raw_response)
 
 if st.session_state.last_data is not None:
     if st.button("📂 Sheets'e Aktar"):
