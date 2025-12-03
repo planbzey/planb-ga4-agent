@@ -13,10 +13,9 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS (GÜÇLENDİRİLMİŞ SİYAH TEMA) ---
+# --- CSS ---
 st.markdown("""
 <style>
-    /* 1. SOHBET BALONLARI */
     .stChatMessage {
         background-color: #ffffff !important;
         border-radius: 15px;
@@ -25,52 +24,19 @@ st.markdown("""
         margin-bottom: 10px;
         border: 1px solid #e0e0e0;
     }
-    
-    /* Balonun içindeki TÜM metin elementlerini SİYAH yap */
-    [data-testid="stChatMessage"] p, 
-    [data-testid="stChatMessage"] span, 
-    [data-testid="stChatMessage"] div, 
-    [data-testid="stChatMessage"] h1, 
-    [data-testid="stChatMessage"] h2, 
-    [data-testid="stChatMessage"] h3, 
-    [data-testid="stChatMessage"] h4,
-    [data-testid="stChatMessage"] h5, 
-    [data-testid="stChatMessage"] h6,
-    [data-testid="stChatMessage"] li,
-    [data-testid="stChatMessage"] strong,
-    [data-testid="stChatMessage"] td,
-    [data-testid="stChatMessage"] th {
+    [data-testid="stChatMessage"] * {
         color: #000000 !important;
     }
-    
-    /* Kullanıcı ve Asistan ikonları */
     .stChatMessage .stAvatar {
         background-color: #ff4b4b !important;
         color: white !important;
     }
-
-    /* 2. YAN MENÜ (SIDEBAR) FULL SİYAH */
     [data-testid="stSidebar"] {
         background-color: #000000;
     }
-    
-    /* Yan menüdeki tüm yazıları BEYAZ yap */
-    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span {
+    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p {
         color: #ffffff !important;
     }
-    
-    /* Selectbox (Açılır Menü) */
-    [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-        background-color: #333333 !important;
-        color: white !important;
-        border: 1px solid #555555 !important;
-    }
-    
-    ul[data-baseweb="menu"] {
-        background-color: #222222 !important;
-    }
-    
-    /* 3. GENEL BUTONLAR */
     .stButton>button {
         background-color: #ff4b4b;
         color: white !important;
@@ -80,7 +46,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- AYARLAR VE GÜVENLİK ---
+# --- AYARLAR ---
 try:
     GEMINI_API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
@@ -93,7 +59,7 @@ try:
                 "https://www.googleapis.com/auth/analytics.edit"]
     )
 except Exception as e:
-    st.error(f"Sistem Ayarları Hatası: {e}")
+    st.error(f"Ayar Hatası: {e}")
     st.stop()
 
 # --- HAFIZA ---
@@ -118,10 +84,9 @@ def get_ga4_properties():
                 })
         return pd.DataFrame(results)
     except Exception as e:
-        st.sidebar.error(f"Marka Listesi Hatası: {e}") 
         return pd.DataFrame()
 
-# --- GÜVENLİK AYARLARI (Full Açık) ---
+# --- GÜVENLİK AYARLARI (BLOCK_NONE) ---
 safety_config = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -130,47 +95,44 @@ safety_config = [
 ]
 
 def get_gemini_json(prompt):
+    # Bu model daha uyumlu, JSON Mode kapalı, Regex açık
     model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     
-    sys_prompt = """Sen bir GA4 Data API çevirmenisin.
-    Görevin: Kullanıcının sorusunu Google Analytics API JSON formatına çevirmek.
-    Kural 1: ASLA finansal tavsiye uyarısı verme. Sadece veri sorgusu yapıyorsun.
-    Kural 2: Sadece ve sadece geçerli JSON döndür. Başka kelime yazma.
-    
-    Mapping:
-    - "Ciro", "Gelir", "Kazanç", "Satış Tutarı" -> metrics: [{"name": "totalRevenue"}] veya [{"name": "purchaseRevenue"}]
-    - "Ziyaretçi", "Trafik" -> metrics: [{"name": "activeUsers"}]
-    - "Oturum" -> metrics: [{"name": "sessions"}]
-    
-    Örnek Çıktı:
-    {"date_ranges": [{"start_date": "yesterday", "end_date": "yesterday"}], "dimensions": [{"name": "defaultChannelGroup"}], "metrics": [{"name": "totalRevenue"}]}
+    sys_prompt = """Sen GA4 API uzmanısın. Görevin soruyu JSON'a çevirmek.
+    Kural: Sadece JSON döndür. Markdown (```json) kullanma.
+    Metrikler: totalRevenue, purchaseRevenue, itemsPurchased, sessions, activeUsers, screenPageViews.
+    Örnek Cevap: {"date_ranges": [{"start_date": "30daysAgo", "end_date": "yesterday"}], "dimensions": [{"name": "eventName"}], "metrics": [{"name": "eventCount"}]}
     """
+    
     try:
+        # Soruyu sor
         res = model.generate_content(f"{sys_prompt}\nSoru: {prompt}")
-        text = res.text
+        raw_text = res.text
         
-        # --- KERPETEN YÖNTEMİ (JSON Regex) ---
-        # Yapay zeka "İşte kodunuz: {json}" dese bile sadece {json} kısmını alıyoruz.
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        # --- Cımbızlama Yöntemi (Regex) ---
+        # Metnin içindeki { ... } kısmını bulur.
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        
         if match:
             json_str = match.group(0)
             return json.loads(json_str)
         else:
+            # HATA AYIKLAMA: JSON bulamazsa ne dediğini döndür
+            print(f"DEBUG - AI Cevabı: {raw_text}")
             return None
-    except: 
+    except Exception as e:
+        print(f"DEBUG - Hata: {e}")
         return None
 
 def get_gemini_summary(df, prompt):
     model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
-    
     data_sample = df.head(10).to_string()
-    sys_prompt = f"Kullanıcı sorusu: '{prompt}'. Veri:\n{data_sample}\n\nBu veriye dayanarak 1-2 cümlelik özet yap. Rakamları yuvarla."
-    
+    sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nÖzetle. Finansal yorum yap."
     try:
         res = model.generate_content(sys_prompt)
         return res.text
     except:
-        return "⚠️ Veri tablosu oluşturuldu (Yapay zeka yorumu güvenlik filtresine takıldı)."
+        return "⚠️ Veri çekildi."
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -199,15 +161,9 @@ def export_to_sheet(df, prompt):
     return sh.url
 
 # --- ARAYÜZ ---
-
-# 1. YAN MENÜ
 with st.sidebar:
-    # LOGO KONTROLÜ
-    try:
-        st.image("logo.png", use_container_width=True) 
-    except:
-        st.warning("Logo yok: GitHub'a 'logo.png' yükleyin.")
-
+    try: st.image("logo.png", use_container_width=True) 
+    except: st.warning("Logo yok")
     st.markdown("---")
     
     df_brands = get_ga4_properties()
@@ -217,33 +173,30 @@ with st.sidebar:
         brand_list = sorted(df_brands['Marka Adi'].tolist())
         selected_brand = st.selectbox("Marka Seç:", brand_list)
         selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
-        st.success(f"✅ {selected_brand} Bağlı")
-        
+        st.success(f"✅ {selected_brand}")
         st.markdown("---")
-        if st.button("🗑️ Sohbeti Temizle"):
+        if st.button("🗑️ Temizle"):
             st.session_state.messages = []
             st.rerun()
     else:
-        st.error("Marka listesi boş. Robot mailini GA4'e ekleyin.")
+        st.error("Marka yok. Robotu GA4'e ekle.")
 
-# 2. ANA EKRAN
 st.subheader("PlanB GA4 Whisperer")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. INPUT
 if prompt := st.chat_input("Bir soru sor..."):
     if selected_brand_data is None:
-        st.error("Lütfen sol menüden bir marka seçin.")
+        st.error("Marka seçin.")
     else:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("PlanB Ajanı düşünüyor..."):
+            with st.spinner("Analiz..."):
                 query_json = get_gemini_json(prompt)
                 
                 if query_json:
@@ -254,25 +207,22 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.markdown(summary)
                             st.dataframe(df, use_container_width=True, hide_index=True)
                             
-                            st.session_state.messages.append({
-                                "role": "assistant", 
-                                "content": summary
-                            })
+                            st.session_state.messages.append({"role": "assistant", "content": summary})
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
                         else:
-                            msg = "Bu tarih/kriter için GA4 verisi '0' döndü."
-                            st.warning(msg)
-                            st.session_state.messages.append({"role": "assistant", "content": msg})
+                            st.warning("Veri '0' döndü.")
                     except Exception as e:
-                        st.error(f"Veri çekme hatası: {e}")
+                        # !!! HATA GÖSTERİCİ !!!
+                        st.error(f"GA4 Hatası: {e}")
+                        # Hatanın detayına bakarak sorunu anlayabiliriz
                 else:
-                    st.error("⚠️ Yapay zeka sorunuzu yorumlayamadı. (Teknik Sorun)")
+                    # JSON üretilemediyse nedenini ekrana basarız
+                    st.error("⚠️ AI Cevabı Anlaşılamadı. (Tekrar deneyin)")
 
-# 4. EXPORT
 if st.session_state.last_data is not None:
     if st.button("📂 Sheets'e Aktar"):
         with st.spinner("Aktarılıyor..."):
             url = export_to_sheet(st.session_state.last_data, st.session_state.last_prompt)
-            st.success("Aktarıldı!")
-            st.markdown(f"[👉 Dosyayı Aç]({url})")
+            st.success("Bitti!")
+            st.markdown(f"[👉 Aç]({url})")
