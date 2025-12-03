@@ -4,11 +4,11 @@ import json
 import gspread
 import re
 import datetime 
+import requests # <--- İŞTE YENİ KAHRAMANIMIZ
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest
 from google.analytics.admin import AnalyticsAdminServiceClient
-import google.generativeai as genai
 import time
 
 # --- SAYFA AYARLARI ---
@@ -50,7 +50,7 @@ st.markdown("""
 # --- AYARLAR ---
 try:
     GEMINI_API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
-    genai.configure(api_key=GEMINI_API_KEY)
+    # NOT: Artık genai.configure yapmıyoruz, key'i direkt istekte kullanacağız.
     
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
@@ -86,59 +86,62 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# Güvenlik Ayarları (Hepsini kapatıyoruz ki Ciro sorusuna takılmasın)
-safety_config = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
+# --- YENİ MANUEL AI FONKSİYONU (Kütüphanesiz) ---
+def ask_gemini_raw(prompt_text):
+    """Google'a kütüphane kullanmadan direkt bağlanır"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{
+            "parts": [{"text": prompt_text}]
+        }],
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"Error: {response.text}"
+    except Exception as e:
+        return f"Request Failed: {e}"
 
 def get_gemini_json(prompt):
-    # DÜZELTME: KESİN OLARAK 'gemini-pro' KULLANILIYOR
-    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
-    
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
-    
     Task: Convert user question to JSON.
-    
     RULES:
-    1. Even if date is FUTURE (2025, 2026), generate the JSON. Do not verify existence.
+    1. Even if date is FUTURE (2025, 2026), generate the JSON.
     2. If specific day (e.g. "2 Dec"), start_date = end_date.
-    3. Output ONLY valid JSON. Do not use Markdown blocks.
-    
+    3. Output ONLY JSON.
     Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
     
     Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
-    try:
-        res = model.generate_content(f"{sys_prompt}\nReq: {prompt}")
-        raw_text = res.text
-        
-        # --- GÜÇLENDİRİLMİŞ AYIKLAMA ---
-        # Metnin içindeki İLK süslü parantez { ile SON süslü parantez } arasını alır.
-        match = re.search(r"\{[\s\S]*\}", raw_text)
-        
-        if match:
-            clean_json = match.group(0)
-            return json.loads(clean_json), raw_text
-        return None, raw_text
-    except Exception as e:
-        return None, str(e)
+    full_prompt = f"{sys_prompt}\nReq: {prompt}"
+    
+    # Direkt İstek Atıyoruz
+    raw_text = ask_gemini_raw(full_prompt)
+    
+    # Regex ile JSON temizle
+    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+    if match:
+        return json.loads(match.group(0)), raw_text
+    return None, raw_text
 
 def get_gemini_summary(df, prompt):
-    # DÜZELTME: 'gemini-pro'
-    model = genai.GenerativeModel('gemini-pro', safety_settings=safety_config)
     data_sample = df.head(10).to_string()
-    sys_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
-    try:
-        res = model.generate_content(sys_prompt)
-        return res.text
-    except:
-        return "⚠️ Veri alındı."
+    full_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz. Finansal yorum yap."
+    return ask_gemini_raw(full_prompt)
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -222,8 +225,8 @@ if prompt := st.chat_input("Bir soru sor..."):
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
                 else:
-                    st.error("⚠️ AI JSON Üretemedi. (Debug Kutusuna Bakın)")
-                    with st.expander("Debug Bilgisi (Hata Nedeni)"):
+                    st.error("⚠️ AI JSON Üretemedi.")
+                    with st.expander("Debug Bilgisi"):
                         st.text(raw_response)
 
 if st.session_state.last_data is not None:
