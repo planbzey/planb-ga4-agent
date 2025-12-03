@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import gspread
+import re
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest
@@ -15,7 +16,7 @@ st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide"
 # --- CSS (GÜÇLENDİRİLMİŞ SİYAH TEMA) ---
 st.markdown("""
 <style>
-    /* 1. SOHBET BALONLARI (Okunabilirlik Ayarı) */
+    /* 1. SOHBET BALONLARI */
     .stChatMessage {
         background-color: #ffffff !important;
         border-radius: 15px;
@@ -33,7 +34,7 @@ st.markdown("""
     [data-testid="stChatMessage"] h2, 
     [data-testid="stChatMessage"] h3, 
     [data-testid="stChatMessage"] h4,
-    [data-testid="stChatMessage"] h5,
+    [data-testid="stChatMessage"] h5, 
     [data-testid="stChatMessage"] h6,
     [data-testid="stChatMessage"] li,
     [data-testid="stChatMessage"] strong,
@@ -42,7 +43,7 @@ st.markdown("""
         color: #000000 !important;
     }
     
-    /* Kullanıcı ikonunu ve Asistan ikonunu belirginleştir */
+    /* Kullanıcı ve Asistan ikonları */
     .stChatMessage .stAvatar {
         background-color: #ff4b4b !important;
         color: white !important;
@@ -58,14 +59,13 @@ st.markdown("""
         color: #ffffff !important;
     }
     
-    /* Selectbox (Açılır Menü) Okunabilirlik Ayarı */
+    /* Selectbox (Açılır Menü) */
     [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
         background-color: #333333 !important;
         color: white !important;
         border: 1px solid #555555 !important;
     }
     
-    /* Dropdown açıldığında çıkan listenin rengi */
     ul[data-baseweb="menu"] {
         background-color: #222222 !important;
     }
@@ -93,7 +93,7 @@ try:
                 "https://www.googleapis.com/auth/analytics.edit"]
     )
 except Exception as e:
-    st.error("Sistem Ayarları Eksik (Secrets). Lütfen Streamlit panelinden yapılandırın.")
+    st.error(f"Sistem Ayarları Hatası: {e}")
     st.stop()
 
 # --- HAFIZA ---
@@ -118,51 +118,59 @@ def get_ga4_properties():
                 })
         return pd.DataFrame(results)
     except Exception as e:
-        st.sidebar.error(f"Hata: {e}") 
+        st.sidebar.error(f"Marka Listesi Hatası: {e}") 
         return pd.DataFrame()
 
-# --- DÜZELTME 1: JSON Oluşturucuya Güvenlik Ayarı Eklendi ---
+# --- GÜVENLİK AYARLARI (Full Açık) ---
+safety_config = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
+
 def get_gemini_json(prompt):
-    # Güvenlik Kilidini Aç
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     
-    sys_prompt = """Sen GA4 Data API uzmanısın. Kullanıcı sorusunu JSON'a çevir. 
-    Metrics, dimensions, dateRanges, limit kullan.
-    Sadece JSON döndür. Markdown yok.
-    Ciro/Revenue sorularında metric olarak 'totalRevenue' veya 'purchaseRevenue' kullan.
-    Örnek: {"date_ranges": [{"start_date": "30daysAgo", "end_date": "yesterday"}], "dimensions": [{"name": "itemAccountName"}], "metrics": [{"name": "itemsPurchased"}]}
+    sys_prompt = """Sen bir GA4 Data API çevirmenisin.
+    Görevin: Kullanıcının sorusunu Google Analytics API JSON formatına çevirmek.
+    Kural 1: ASLA finansal tavsiye uyarısı verme. Sadece veri sorgusu yapıyorsun.
+    Kural 2: Sadece ve sadece geçerli JSON döndür. Başka kelime yazma.
+    
+    Mapping:
+    - "Ciro", "Gelir", "Kazanç", "Satış Tutarı" -> metrics: [{"name": "totalRevenue"}] veya [{"name": "purchaseRevenue"}]
+    - "Ziyaretçi", "Trafik" -> metrics: [{"name": "activeUsers"}]
+    - "Oturum" -> metrics: [{"name": "sessions"}]
+    
+    Örnek Çıktı:
+    {"date_ranges": [{"start_date": "yesterday", "end_date": "yesterday"}], "dimensions": [{"name": "defaultChannelGroup"}], "metrics": [{"name": "totalRevenue"}]}
     """
     try:
         res = model.generate_content(f"{sys_prompt}\nSoru: {prompt}")
-        cleaned_json = res.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(cleaned_json)
+        text = res.text
+        
+        # --- KERPETEN YÖNTEMİ (JSON Regex) ---
+        # Yapay zeka "İşte kodunuz: {json}" dese bile sadece {json} kısmını alıyoruz.
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+            return json.loads(json_str)
+        else:
+            return None
     except: 
         return None
 
-# --- DÜZELTME 2: Yorumcuya Güvenlik Ayarı Eklendi ---
 def get_gemini_summary(df, prompt):
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+    model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_config)
     
     data_sample = df.head(10).to_string()
-    sys_prompt = f"Kullanıcı şunu sordu: '{prompt}'. Elimdeki GA4 verisi şu:\n{data_sample}\n\nBu veriye bakarak kullanıcıya 1-2 cümlelik samimi, net bir özet cevap ver. Rakamları yuvarlayabilirsin. Asla yorum yapmaktan kaçınma."
+    sys_prompt = f"Kullanıcı sorusu: '{prompt}'. Veri:\n{data_sample}\n\nBu veriye dayanarak 1-2 cümlelik özet yap. Rakamları yuvarla."
     
     try:
         res = model.generate_content(sys_prompt)
         return res.text
-    except Exception as e:
-        return f"⚠️ Veriyi çektim ama yorumlayamadım. İşte tablo:"
+    except:
+        return "⚠️ Veri tablosu oluşturuldu (Yapay zeka yorumu güvenlik filtresine takıldı)."
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -194,17 +202,13 @@ def export_to_sheet(df, prompt):
 
 # 1. YAN MENÜ
 with st.sidebar:
+    # LOGO KONTROLÜ
     try:
-        # Lütfen GitHub'a "pb-amblem-blk (1).png" adıyla yüklediğinden emin ol
-        # Eğer "logo.png" yaptıysan burayı "logo.png" olarak değiştir
         st.image("logo.png", use_container_width=True) 
     except:
-        st.caption("PlanB Logo")
+        st.warning("Logo yok: GitHub'a 'logo.png' yükleyin.")
 
     st.markdown("---")
-    
-    # Debug bilgisi (İşler düzelince silebilirsin)
-    # st.caption(f"Bot: {st.secrets['gcp_service_account']['client_email']}")
     
     df_brands = get_ga4_properties()
     selected_brand_data = None
@@ -220,7 +224,7 @@ with st.sidebar:
             st.session_state.messages = []
             st.rerun()
     else:
-        st.error("Markalar yüklenemedi. Bot mailini GA4'e ekleyin.")
+        st.error("Marka listesi boş. Robot mailini GA4'e ekleyin.")
 
 # 2. ANA EKRAN
 st.subheader("PlanB GA4 Whisperer")
@@ -252,7 +256,7 @@ if prompt := st.chat_input("Bir soru sor..."):
                             
                             st.session_state.messages.append({
                                 "role": "assistant", 
-                                "content": summary + "\n\n*(Tablo yukarıda gösterildi)*"
+                                "content": summary
                             })
                             st.session_state.last_data = df
                             st.session_state.last_prompt = prompt
@@ -261,9 +265,9 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.warning(msg)
                             st.session_state.messages.append({"role": "assistant", "content": msg})
                     except Exception as e:
-                        st.error(f"Hata: {e}")
+                        st.error(f"Veri çekme hatası: {e}")
                 else:
-                    st.error("Sorunuzu teknik dile çeviremedim. (API Güvenlik filtresi olabilir, tekrar deneyin).")
+                    st.error("⚠️ Yapay zeka sorunuzu yorumlayamadı. (Teknik Sorun)")
 
 # 4. EXPORT
 if st.session_state.last_data is not None:
