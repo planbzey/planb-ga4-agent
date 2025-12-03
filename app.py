@@ -178,8 +178,10 @@ if prompt := st.chat_input("Soru sor... (Örn: Geçen ay en çok satan 5 ürün?
                             st.session_state.last_prompt = prompt
                         else:
                             st.warning("Veri bulunamadı.")
-                    except Exception as e:
-                        st.error(f"Hata: {e}")
+                except Exception as e:
+        # HATAYI EKRANA BAS Kİ GÖRELİM
+        st.error(f"🚨 HATA DETAYI: {e}") 
+        return pd.DataFrame()
 
 # 4. Export Butonu (Son veri varsa göster)
 if st.session_state.last_data is not None:
