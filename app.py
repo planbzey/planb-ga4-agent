@@ -4,7 +4,7 @@ import json
 import gspread
 import re
 import datetime 
-import requests # <--- İŞTE YENİ KAHRAMANIMIZ
+import requests 
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest
@@ -50,7 +50,6 @@ st.markdown("""
 # --- AYARLAR ---
 try:
     GEMINI_API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
-    # NOT: Artık genai.configure yapmıyoruz, key'i direkt istekte kullanacağız.
     
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
@@ -86,16 +85,12 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- YENİ MANUEL AI FONKSİYONU (Kütüphanesiz) ---
+# --- MANUEL AI İSTEĞİ (Kütüphanesiz) ---
 def ask_gemini_raw(prompt_text):
-    """Google'a kütüphane kullanmadan direkt bağlanır"""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
     headers = {'Content-Type': 'application/json'}
     data = {
-        "contents": [{
-            "parts": [{"text": prompt_text}]
-        }],
+        "contents": [{"parts": [{"text": prompt_text}]}],
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -103,7 +98,6 @@ def ask_gemini_raw(prompt_text):
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
         ]
     }
-    
     try:
         response = requests.post(url, headers=headers, json=data)
         if response.status_code == 200:
@@ -118,25 +112,37 @@ def get_gemini_json(prompt):
     
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
     Task: Convert user question to JSON.
+    
     RULES:
     1. Even if date is FUTURE (2025, 2026), generate the JSON.
     2. If specific day (e.g. "2 Dec"), start_date = end_date.
-    3. Output ONLY JSON.
-    Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
+    3. Output ONLY valid JSON. 
+    4. IMPORTANT: JSON keys must be "date_ranges", "dimensions", "metrics".
     
     Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
     full_prompt = f"{sys_prompt}\nReq: {prompt}"
     
-    # Direkt İstek Atıyoruz
     raw_text = ask_gemini_raw(full_prompt)
     
-    # Regex ile JSON temizle
-    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-    if match:
-        return json.loads(match.group(0)), raw_text
-    return None, raw_text
+    # --- GÜÇLENDİRİLMİŞ JSON AYIKLAMA ---
+    try:
+        # 1. En geniş kapsamlı süslü parantez aralığını bul
+        match = re.search(r"\{[\s\S]*\}", raw_text)
+        if match:
+            clean_json = match.group(0)
+            parsed = json.loads(clean_json)
+            
+            # 2. Kritik anahtarları kontrol et (Eksikse tamamla)
+            if "date_ranges" not in parsed:
+                 # Hata varsa varsayılan olarak bugünü ata
+                 parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
+            
+            return parsed, raw_text
+        return None, raw_text
+    except Exception as e:
+        return None, f"JSON Parse Error: {e} | Raw: {raw_text}"
 
 def get_gemini_summary(df, prompt):
     data_sample = df.head(10).to_string()
@@ -145,19 +151,27 @@ def get_gemini_summary(df, prompt):
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
+    
+    # Hata önleyici kontrol
+    dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
+    metrics = [{"name": m['name']} for m in query.get('metrics', [])]
+    date_ranges = [query.get('date_ranges', [{"start_date": "today", "end_date": "today"}])[0]]
+    
     req = RunReportRequest(
         property=f"properties/{prop_id}",
-        dimensions=[{"name": d['name']} for d in query.get('dimensions', [])],
-        metrics=[{"name": m['name']} for m in query.get('metrics', [])],
-        date_ranges=[query['date_ranges'][0]],
+        dimensions=dimensions,
+        metrics=metrics,
+        date_ranges=date_ranges,
         limit=query.get('limit', 100)
     )
     res = client.run_report(req)
     data = []
     for row in res.rows:
         item = {}
-        for i, dim in enumerate(query.get('dimensions', [])): item[dim['name']] = row.dimension_values[i].value
-        for i, met in enumerate(query.get('metrics', [])): item[met['name']] = row.metric_values[i].value
+        for i, dim in enumerate(dimensions): 
+            item[dim['name']] = row.dimension_values[i].value
+        for i, met in enumerate(metrics): 
+            item[met['name']] = row.metric_values[i].value
         data.append(item)
     return pd.DataFrame(data)
 
@@ -224,6 +238,8 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
+                        with st.expander("Teknik Detay"):
+                             st.json(query_json) # Hangi JSON ile hata aldığımızı görelim
                 else:
                     st.error("⚠️ AI JSON Üretemedi.")
                     with st.expander("Debug Bilgisi"):
