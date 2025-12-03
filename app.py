@@ -149,11 +149,11 @@ with st.sidebar:
     try:
         st.image("logo.png", use_container_width=True) 
     except:
-        st.caption("PlanB Logo") # Logo yüklenemezse yazı çıkar
+        st.caption("PlanB Logo")
 
     st.markdown("---")
     
-    # Hata ayıklama için mail (Sorun yoksa silebilirsin)
+    # Debug amaçlı mail (Çalışınca silebilirsin)
     st.caption(f"Bot: {st.secrets['gcp_service_account']['client_email']}")
     
     df_brands = get_ga4_properties()
@@ -179,9 +179,10 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. INPUT
+# 3. INPUT VE İŞLEM
 if prompt := st.chat_input("Bir soru sor..."):
-    if not selected_brand_data:
+    # DÜZELTME BURADA YAPILDI: "if not selected_brand_data" YERİNE "is None" KULLANILDI
+    if selected_brand_data is None:
         st.error("Lütfen sol menüden bir marka seçin.")
     else:
         st.session_state.messages.append({"role": "user", "content": prompt})
