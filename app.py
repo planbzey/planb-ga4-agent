@@ -12,24 +12,51 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
 
-# --- CSS (Görünüm) ---
+# --- CSS (ÖZEL SİYAH TASARIM) ---
 st.markdown("""
 <style>
+    /* Sohbet Balonları */
     .stChatMessage {
         background-color: #ffffff;
         border-radius: 15px;
         padding: 10px;
         box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
+    
+    /* YAN MENÜ (SIDEBAR) FULL SİYAH */
     [data-testid="stSidebar"] {
-        background-color: #f8f9fa;
+        background-color: #000000;
+    }
+    
+    /* Yan menüdeki tüm yazıları BEYAZ yap */
+    [data-testid="stSidebar"] * {
+        color: #ffffff !important;
+    }
+    
+    /* Yan menüdeki Selectbox (Marka Seçimi) arka planını düzelt */
+    [data-testid="stSidebar"] .stSelectbox > div > div {
+        background-color: #333333;
+        color: white;
+    }
+    
+    /* Butonları PlanB Kırmızısı Yap */
+    .stButton>button {
+        background-color: #ff4b4b;
+        color: white;
+        border: none;
+    }
+
+    /* Uyarı kutularını (Warning/Success) Sidebar içinde şıklaştır */
+    [data-testid="stSidebar"] .stAlert {
+        background-color: #222222 !important;
+        color: #eeeeee !important;
+        border: 1px solid #444444;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- AYARLAR VE GÜVENLİK ---
 try:
-    # Streamlit Secrets'tan bilgileri çek
     GEMINI_API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
     
@@ -44,7 +71,7 @@ except Exception as e:
     st.error("Sistem Ayarları Eksik (Secrets). Lütfen Streamlit panelinden yapılandırın.")
     st.stop()
 
-# --- HAFIZA (Session State) ---
+# --- HAFIZA ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_data" not in st.session_state:
@@ -53,15 +80,12 @@ if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = ""
 
 # --- FONKSİYONLAR ---
-
 @st.cache_data(ttl=300)
 def get_ga4_properties():
-    """Otomatik Hesap Keşfi"""
     try:
         admin_client = AnalyticsAdminServiceClient(credentials=creds)
         results = []
-        # Hesap özetlerini listele
-        for account in admin_client.list_account_summaries(parent=""):
+        for account in admin_client.list_account_summaries():
             for property_summary in account.property_summaries:
                 results.append({
                     "Marka Adi": property_summary.display_name,
@@ -69,8 +93,7 @@ def get_ga4_properties():
                 })
         return pd.DataFrame(results)
     except Exception as e:
-        # !!! BURASI DÜZELTİLDİ: HATAYI EKRANA BAS !!!
-        st.error(f"🚨 KRİTİK HATA: {e}") 
+        st.sidebar.error(f"Hata: {e}") 
         return pd.DataFrame()
 
 def get_gemini_json(prompt):
@@ -86,7 +109,6 @@ def get_gemini_json(prompt):
     except: return None
 
 def get_gemini_summary(df, prompt):
-    """Veriyi yorumlayan yapay zeka"""
     model = genai.GenerativeModel('gemini-1.5-flash')
     data_sample = df.head(10).to_string()
     sys_prompt = f"Kullanıcı şunu sordu: '{prompt}'. Elimdeki GA4 verisi şu:\n{data_sample}\n\nBu veriye bakarak kullanıcıya 1-2 cümlelik samimi, net bir özet cevap ver. Rakamları yuvarlayabilirsin."
@@ -121,48 +143,53 @@ def export_to_sheet(df, prompt):
 
 # --- ARAYÜZ ---
 
-# 1. Yan Menü
+# 1. YAN MENÜ (SİYAH TASARIM)
 with st.sidebar:
-    st.title("PlanB 💬")
-    st.caption("Veri Ajanı v1.1")
+    # LOGO BURAYA GELİYOR
+    try:
+        st.image("logo.png", use_container_width=True) 
+    except:
+        st.caption("PlanB Logo") # Logo yüklenemezse yazı çıkar
+
+    st.markdown("---")
     
-    # Hata Ayıklama Modu
-    st.info(f"📧 Robot Maili: {st.secrets['gcp_service_account']['client_email']}")
+    # Hata ayıklama için mail (Sorun yoksa silebilirsin)
+    st.caption(f"Bot: {st.secrets['gcp_service_account']['client_email']}")
     
     df_brands = get_ga4_properties()
     selected_brand_data = None
     
     if not df_brands.empty:
-        # Alfabetik sırala
         brand_list = sorted(df_brands['Marka Adi'].tolist())
         selected_brand = st.selectbox("Marka Seç:", brand_list)
         selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
         st.success(f"✅ {selected_brand} Bağlı")
         
-        if st.button("🗑️ Temizle"):
+        st.markdown("---")
+        if st.button("🗑️ Sohbeti Temizle"):
             st.session_state.messages = []
             st.rerun()
     else:
-        st.warning("⚠️ Markalar Listelenemedi! (Hata detayına bakın)")
+        st.error("Markalar yüklenemedi. Bot mailini GA4'e ekleyin.")
 
-# 2. Sohbet Akışı
-st.subheader("PlanB Veri Asistanı")
+# 2. ANA EKRAN
+st.subheader("PlanB GA4 Whisperer")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. Input ve İşlem
-if prompt := st.chat_input("Soru sor... (Örn: Geçen ay en çok satan 5 ürün?)"):
+# 3. INPUT
+if prompt := st.chat_input("Bir soru sor..."):
     if not selected_brand_data:
-        st.error("Lütfen önce bir marka seçin.")
+        st.error("Lütfen sol menüden bir marka seçin.")
     else:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analiz yapılıyor..."):
+            with st.spinner("PlanB Ajanı düşünüyor..."):
                 query_json = get_gemini_json(prompt)
                 if query_json:
                     try:
@@ -170,7 +197,6 @@ if prompt := st.chat_input("Soru sor... (Örn: Geçen ay en çok satan 5 ürün?
                         if not df.empty:
                             summary = get_gemini_summary(df, prompt)
                             st.markdown(summary)
-                            # Tabloyu buraya basıyoruz
                             st.dataframe(df, use_container_width=True, hide_index=True)
                             
                             st.session_state.messages.append({"role": "assistant", "content": summary})
@@ -181,10 +207,10 @@ if prompt := st.chat_input("Soru sor... (Örn: Geçen ay en çok satan 5 ürün?
                     except Exception as e:
                         st.error(f"Hata: {e}")
 
-# 4. Export Butonu (Son veri varsa göster)
+# 4. EXPORT
 if st.session_state.last_data is not None:
-    if st.button("📂 Bu Tabloyu Google Sheets'e Aktar"):
-        with st.spinner("Oluşturuluyor..."):
+    if st.button("📂 Sheets'e Aktar"):
+        with st.spinner("Aktarılıyor..."):
             url = export_to_sheet(st.session_state.last_data, st.session_state.last_prompt)
-            st.success("Tamamlandı!")
+            st.success("Aktarıldı!")
             st.markdown(f"[👉 Dosyayı Aç]({url})")
