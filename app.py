@@ -44,6 +44,11 @@ st.markdown("""
         border: none;
         font-weight: bold;
     }
+    /* Debug ve Hata Kutuları için Beyaz Arkaplan */
+    .stAlert, .stJson, .stCode {
+        background-color: #ffffff !important;
+        color: #000000 !important; 
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -82,16 +87,18 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUEL AI İSTEĞİ (gemini-pro + TEMPERATURE 0) ---
+# --- MANUAL AI İSTEĞİ (STABLE V1 ENDPOINT) ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    # DEĞİŞİKLİK BURADA: 'v1beta' YERİNE 'v1' KULLANIYORUZ.
+    # Model: 'gemini-pro' (En kararlı sürüm)
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt_text}]}],
-        # BURASI ÇOK ÖNEMLİ: Temperature 0 yaptık, yaratıcılık yok, sadece itaat var.
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": 800
+            "maxOutputTokens": 1000
         },
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -100,66 +107,56 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
         ]
     }
+    
     try:
         response = requests.post(url, headers=headers, json=data)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"API Error: {response.text}"
+            return f"API ERROR ({response.status_code}): {response.text}"
     except Exception as e:
         return f"Request Failed: {e}"
 
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
-    # --- PROMPT GÜNCELLENDİ: ÖRNEKLİ ANLATIM (Few-Shot) ---
-    sys_prompt = f"""You are a strict JSON generator for GA4 API. 
-    Current Date: {today_str}.
+    sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
+    Task: Convert user question to JSON.
     
-    Goal: Convert user query to JSON.
+    RULES:
+    1. If user asks for a specific date (e.g. "2 Dec 2025"), YOU MUST USE THAT DATE.
+    2. Format: "YYYY-MM-DD".
+    3. Output ONLY valid JSON.
     
-    STRICT RULES:
-    1. Output ONLY valid JSON. No text, no markdown.
-    2. KEY REQUIREMENT: You MUST include "date_ranges", "metrics", "dimensions".
-    3. FUTURE DATES: If user asks for "2 Dec 2025", YOU MUST USE "2025-12-02". Do not use 'today'.
+    Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
     
-    EXAMPLES:
-    User: "dünkü ciro"
-    JSON: {{"date_ranges": [{{"start_date": "yesterday", "end_date": "yesterday"}}], "dimensions": [], "metrics": [{{"name": "totalRevenue"}}]}}
-    
-    User: "revenue for december 2nd 2025"
-    JSON: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [], "metrics": [{{"name": "totalRevenue"}}]}}
-    
-    User: "kasım 2025 en çok satan ürünler"
-    JSON: {{"date_ranges": [{{"start_date": "2025-11-01", "end_date": "2025-11-30"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
+    Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
     full_prompt = f"{sys_prompt}\nUser: {prompt}\nJSON:"
     
-    # Temperature 0 ile çağırıyoruz
     raw_text = ask_gemini_raw(full_prompt, temperature=0.0)
     
+    # JSON AYIKLAMA
     try:
         match = re.search(r"\{[\s\S]*\}", raw_text)
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
             
-            # Son kontrol: Date range yoksa biz ekleyelim (Emniyet sübabı)
+            # Emniyet: Tarih yoksa bugünü ekle
             if "date_ranges" not in parsed:
-                 # Yapay zeka yine de unuttuysa, prompttan tarihi ayıklamayı deneyebiliriz ama şimdilik today verelim
-                 # Ancak temperature 0 ile unutma ihtimali çok düşüktür.
                  parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
                  
             return parsed, raw_text
         return None, raw_text
     except Exception as e:
-        return None, f"Hata: {raw_text}"
+        return None, raw_text
 
 def get_gemini_summary(df, prompt):
     data_sample = df.head(10).to_string()
     full_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
-    return ask_gemini_raw(full_prompt, temperature=0.7) # Yorum yaparken biraz yaratıcı olabilir
+    return ask_gemini_raw(full_prompt, temperature=0.5)
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
@@ -248,12 +245,14 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
-                        with st.expander("Sorgulanan Tarih (JSON)"):
-                            st.json(query_json) 
+                        # JSON'ı temiz ve görünür şekilde bas
+                        with st.expander("Teknik Detay (Kullanılan Kod)"):
+                             st.json(query_json)
                 else:
-                    st.error("⚠️ AI JSON Üretemedi. (Debug Kutusuna Bakın)")
-                    with st.expander("Debug Bilgisi"):
-                        st.text(raw_response)
+                    st.error("⚠️ AI Bağlantı Hatası.")
+                    # Hata mesajını temiz ve görünür şekilde bas
+                    with st.expander("Debug Bilgisi (API Cevabı)"):
+                        st.code(raw_response)
 
 if st.session_state.last_data is not None:
     if st.button("📂 Sheets'e Aktar"):
