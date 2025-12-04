@@ -16,12 +16,7 @@ st.set_page_config(page_title="PlanB Whisperer", page_icon="⚡", layout="wide")
 # --- CSS İLE MODERN MAKYAJ ---
 st.markdown("""
 <style>
-    /* Ana Arka Plan ve Yazı Tipleri */
-    .stApp {
-        background-color: #f8f9fa;
-    }
-    
-    /* Sohbet Baloncukları */
+    .stApp { background-color: #f8f9fa; }
     .stChatMessage {
         background-color: #ffffff !important;
         border-radius: 20px;
@@ -30,27 +25,15 @@ st.markdown("""
         border: 1px solid #eee;
         margin-bottom: 15px;
     }
-    
-    /* Kullanıcı Baloncuğu */
     [data-testid="stChatMessage"][data-testid="user"] {
         background-color: #e3f2fd !important;
         border-bottom-right-radius: 5px;
     }
-    
-    /* Asistan Baloncuğu */
     [data-testid="stChatMessage"][data-testid="assistant"] {
         border-bottom-left-radius: 5px;
     }
-
-    /* Sidebar Tasarımı */
-    [data-testid="stSidebar"] {
-        background-color: #1e1e1e;
-    }
-    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p {
-        color: #e0e0e0 !important;
-    }
-
-    /* Butonlar (Hızlı Menü) */
+    [data-testid="stSidebar"] { background-color: #1e1e1e; }
+    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p { color: #e0e0e0 !important; }
     .stButton>button {
         border-radius: 20px;
         border: 1px solid #ddd;
@@ -65,8 +48,6 @@ st.markdown("""
         color: #ff4b4b;
         background-color: #fff0f0;
     }
-    
-    /* Tablo Görünümü */
     [data-testid="stDataFrame"] {
         border-radius: 10px;
         overflow: hidden;
@@ -99,23 +80,16 @@ if "active_model_name" not in st.session_state:
 if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = "Rapor"
 
-# --- GRAFİK MOTORU (YENİ) ---
+# --- GRAFİK MOTORU ---
 def auto_visualize(df):
-    """Veriye bakıp otomatik grafik seçer"""
     columns = [c.lower() for c in df.columns]
-    
-    # Eğer tarih varsa Çizgi Grafik çiz
     if any(x in columns for x in ['date', 'tarih', 'yearmonth', 'gün', 'day']):
-        # Tarih olmayan ilk sayısal sütunu bulmaya çalış
         numeric_cols = df.select_dtypes(include=['number']).columns
         if len(numeric_cols) > 0:
             st.caption("📈 Zaman Grafiği")
-            # Streamlit otomatik tarih sütununu X ekseni yapar
             st.line_chart(df, y=numeric_cols)
             return
-
-    # Eğer sadece kategorik veri varsa Bar Grafik çiz
-    if len(df) > 1 and len(df) < 20: # Çok kalabalıksa çizme
+    if len(df) > 1 and len(df) < 20:
         st.caption("📊 Karşılaştırma Grafiği")
         st.bar_chart(df)
 
@@ -138,9 +112,160 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
 
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
+    
+    # HATA ÇIKARAN KISIM DÜZELTİLDİ:
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
-    Task: Convert user question to JSON for GA4 report.
-    RULES:
-    1. Output ONLY valid JSON. No markdown.
-    2. Suggest metrics like: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased, bounceRate.
-    Example: {{"date
+Task: Convert user question to JSON for GA4 report.
+RULES:
+1. Output ONLY valid JSON. No markdown.
+2. Suggest metrics like: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
+Example JSON Structure: 
+{{
+  "date_ranges": [{{"start_date": "30daysAgo", "end_date": "today"}}], 
+  "dimensions": [{{"name": "date"}}], 
+  "metrics": [{{"name": "activeUsers"}}]
+}}
+"""
+    full_prompt = f"{sys_prompt}\nReq: {prompt}"
+    raw_text = ask_gemini_raw(full_prompt)
+    try:
+        match = re.search(r"\{[\s\S]*\}", raw_text)
+        if match:
+            clean_json = match.group(0)
+            parsed = json.loads(clean_json)
+            if "date_ranges" not in parsed: parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
+            return parsed, raw_text
+        return None, raw_text
+    except:
+        return None, raw_text
+
+def get_gemini_summary(df, prompt):
+    data_sample = df.head(10).to_string()
+    full_prompt = f"Kullanıcı Sorusu: '{prompt}'. \nGA4 Verisi:\n{data_sample}\n\nBu veriyi bir yöneticiye sunar gibi 2-3 cümleyle, emojiler kullanarak özetle. Trendleri vurgula."
+    return ask_gemini_raw(full_prompt, temperature=0.7)
+
+def run_ga4_report(prop_id, query):
+    client = BetaAnalyticsDataClient(credentials=creds)
+    dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
+    metrics = [{"name": m['name']} for m in query.get('metrics', [])]
+    date_ranges = [query['date_ranges'][0]]
+    
+    req = RunReportRequest(
+        property=f"properties/{prop_id}",
+        dimensions=dimensions,
+        metrics=metrics,
+        date_ranges=date_ranges,
+        limit=query.get('limit', 100)
+    )
+    res = client.run_report(req)
+    data = []
+    for row in res.rows:
+        item = {}
+        for i, dim in enumerate(dimensions): item[dim['name']] = row.dimension_values[i].value
+        for i, met in enumerate(metrics): 
+            val = row.metric_values[i].value
+            try: item[met['name']] = float(val)
+            except: item[met['name']] = val
+        data.append(item)
+    return pd.DataFrame(data)
+
+def export_to_sheet(df, prompt_text):
+    gc = gspread.authorize(creds)
+    safe_title = str(prompt_text)[:20] if prompt_text else "Rapor"
+    sh = gc.create(f"Rapor: {safe_title}")
+    sh.sheet1.update_cell(1, 1, f"Soru: {prompt_text}")
+    sh.sheet1.update([df.columns.values.tolist()] + df.values.tolist(), 'A3')
+    sh.share(None, perm_type='anyone', role='reader')
+    return sh.url
+
+def get_ga4_properties():
+    try:
+        admin_client = AnalyticsAdminServiceClient(credentials=creds)
+        results = []
+        for account in admin_client.list_account_summaries():
+            for property_summary in account.property_summaries:
+                results.append({"Marka Adi": property_summary.display_name, "GA4_Property_ID": property_summary.property.split('/')[-1]})
+        return pd.DataFrame(results)
+    except: return pd.DataFrame()
+
+# --- SIDEBAR & MARKA SEÇİMİ ---
+with st.sidebar:
+    st.title("⚙️ Kontrol")
+    df_brands = get_ga4_properties()
+    selected_brand_data = None
+    
+    if not df_brands.empty:
+        brand_list = sorted(df_brands['Marka Adi'].tolist())
+        selected_brand = st.selectbox("Marka Seç:", brand_list)
+        selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
+        st.success(f"Aktif: {selected_brand}")
+    else:
+        st.error("Marka Bulunamadı")
+    
+    st.markdown("---")
+    if st.button("🗑️ Sohbeti Temizle"):
+        st.session_state.messages = []
+        st.session_state.last_data = None
+        st.rerun()
+
+# --- ANA EKRAN ---
+st.title("🤖 GA4 Asistanı")
+st.caption("Verilerle sohbet edin. Grafik ve tablolar anında hazır.")
+
+col1, col2, col3, col4 = st.columns(4)
+quick_prompt = None
+if col1.button("📅 Dün Durum?"): quick_prompt = "Dünkü toplam kullanıcı, oturum ve geliri getir"
+if col2.button("📉 Son 1 Hafta"): quick_prompt = "Son 7 günün gün gün kullanıcı ve gelir değişimi"
+if col3.button("🌍 Şehirler"): quick_prompt = "Geçen ay en çok gelen ilk 10 şehir"
+if col4.button("📱 Cihazlar"): quick_prompt = "Son 30 günde mobil ve desktop kullanım oranları"
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+prompt = st.chat_input("Merak ettiğin veriyi sor...")
+if quick_prompt: prompt = quick_prompt
+
+if prompt:
+    if selected_brand_data is None:
+        st.error("Lütfen soldan bir marka seçin.")
+    else:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            with st.spinner("Veriler çekiliyor..."):
+                query_json, raw_res = get_gemini_json(prompt)
+                
+                if query_json:
+                    try:
+                        df = run_ga4_report(str(selected_brand_data['GA4_Property_ID']), query_json)
+                        if not df.empty:
+                            summary = get_gemini_summary(df, prompt)
+                            message_placeholder.markdown(summary)
+                            auto_visualize(df)
+                            with st.expander("Detaylı Tabloyu Gör"):
+                                st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.session_state.messages.append({"role": "assistant", "content": summary})
+                            st.session_state.last_data = df
+                            st.session_state.last_prompt = prompt
+                        else:
+                            warn_msg = "Bu tarih aralığı veya kriter için veri bulunamadı (0 sonuç)."
+                            message_placeholder.warning(warn_msg)
+                            st.session_state.messages.append({"role": "assistant", "content": warn_msg})
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+                else:
+                    st.error("Soruyu anlayamadım, tekrar dener misin?")
+
+if st.session_state.last_data is not None:
+    st.markdown("---")
+    col_dl1, col_dl2 = st.columns([1, 4])
+    with col_dl1:
+        if st.button("📂 Sheets'e Gönder"):
+            with st.spinner("Google Sheets oluşturuluyor..."):
+                url = export_to_sheet(st.session_state.last_data, st.session_state.last_prompt)
+                st.success("Hazır!")
+                st.markdown(f"[👉 Raporu Aç]({url})")
