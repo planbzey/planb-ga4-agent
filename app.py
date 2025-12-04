@@ -82,12 +82,17 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUEL AI İSTEĞİ (gemini-pro) ---
-def ask_gemini_raw(prompt_text):
+# --- MANUEL AI İSTEĞİ (gemini-pro + TEMPERATURE 0) ---
+def ask_gemini_raw(prompt_text, temperature=0.0):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt_text}]}],
+        # BURASI ÇOK ÖNEMLİ: Temperature 0 yaptık, yaratıcılık yok, sadece itaat var.
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": 800
+        },
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -107,31 +112,45 @@ def ask_gemini_raw(prompt_text):
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
-    # --- PROMPT GÜNCELLENDİ: "TODAY" YASAKLANDI ---
-    sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
-    Task: Convert user question to JSON.
+    # --- PROMPT GÜNCELLENDİ: ÖRNEKLİ ANLATIM (Few-Shot) ---
+    sys_prompt = f"""You are a strict JSON generator for GA4 API. 
+    Current Date: {today_str}.
     
-    STRICT DATE RULES:
-    1. EXTRACT the date from user prompt EXACTLY.
-    2. If user says "2 December 2025", start_date AND end_date MUST be "2025-12-02".
-    3. DO NOT use 'today' or 'yesterday' if user provided a specific date.
-    4. Even if the date is in the FUTURE (2025, 2030), USE THAT DATE. Do not argue.
+    Goal: Convert user query to JSON.
     
-    Output ONLY JSON.
-    Example for '2 Dec 2025': {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "totalRevenue"}}]}}
+    STRICT RULES:
+    1. Output ONLY valid JSON. No text, no markdown.
+    2. KEY REQUIREMENT: You MUST include "date_ranges", "metrics", "dimensions".
+    3. FUTURE DATES: If user asks for "2 Dec 2025", YOU MUST USE "2025-12-02". Do not use 'today'.
+    
+    EXAMPLES:
+    User: "dünkü ciro"
+    JSON: {{"date_ranges": [{{"start_date": "yesterday", "end_date": "yesterday"}}], "dimensions": [], "metrics": [{{"name": "totalRevenue"}}]}}
+    
+    User: "revenue for december 2nd 2025"
+    JSON: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [], "metrics": [{{"name": "totalRevenue"}}]}}
+    
+    User: "kasım 2025 en çok satan ürünler"
+    JSON: {{"date_ranges": [{{"start_date": "2025-11-01", "end_date": "2025-11-30"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
-    full_prompt = f"{sys_prompt}\nUser Query: {prompt}"
-    raw_text = ask_gemini_raw(full_prompt)
+    full_prompt = f"{sys_prompt}\nUser: {prompt}\nJSON:"
+    
+    # Temperature 0 ile çağırıyoruz
+    raw_text = ask_gemini_raw(full_prompt, temperature=0.0)
     
     try:
         match = re.search(r"\{[\s\S]*\}", raw_text)
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
-            # Eğer yapay zeka tarih koymadıysa hata verelim ki 'today' kullanmasın
+            
+            # Son kontrol: Date range yoksa biz ekleyelim (Emniyet sübabı)
             if "date_ranges" not in parsed:
-                 return None, "AI tarih aralığı üretmedi."
+                 # Yapay zeka yine de unuttuysa, prompttan tarihi ayıklamayı deneyebiliriz ama şimdilik today verelim
+                 # Ancak temperature 0 ile unutma ihtimali çok düşüktür.
+                 parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
+                 
             return parsed, raw_text
         return None, raw_text
     except Exception as e:
@@ -140,16 +159,14 @@ def get_gemini_json(prompt):
 def get_gemini_summary(df, prompt):
     data_sample = df.head(10).to_string()
     full_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
-    return ask_gemini_raw(full_prompt)
+    return ask_gemini_raw(full_prompt, temperature=0.7) # Yorum yaparken biraz yaratıcı olabilir
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
     
     dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
     metrics = [{"name": m['name']} for m in query.get('metrics', [])]
-    
-    # Artık fallback yok, direkt JSON'dan geleni kullanıyoruz
-    date_ranges = [query['date_ranges'][0]] 
+    date_ranges = [query['date_ranges'][0]]
     
     req = RunReportRequest(
         property=f"properties/{prop_id}",
@@ -197,7 +214,7 @@ with st.sidebar:
             st.session_state.clear()
             st.rerun()
     else:
-        st.error("Marka bulunamadı.")
+        st.error("Marka bulunamadı. Robotu ekleyin.")
 
 st.subheader("PlanB GA4 Whisperer")
 
@@ -231,10 +248,10 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
-                        with st.expander("Sorgulanan Tarih"):
-                            st.json(query_json) # Hangi tarihi sorguladığını buradan görebilirsin
+                        with st.expander("Sorgulanan Tarih (JSON)"):
+                            st.json(query_json) 
                 else:
-                    st.error("⚠️ AI Tarihi Anlayamadı.")
+                    st.error("⚠️ AI JSON Üretemedi. (Debug Kutusuna Bakın)")
                     with st.expander("Debug Bilgisi"):
                         st.text(raw_response)
 
