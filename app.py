@@ -12,7 +12,7 @@ from google.analytics.admin import AnalyticsAdminServiceClient
 import time
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="PlanB Whisperer", page_icon="💬", layout="wide")
+st.set_page_config(page_title="PlanB Whisperer", page_icon="⚡", layout="wide")
 
 # --- CSS TASARIM ---
 st.markdown("""
@@ -44,10 +44,14 @@ st.markdown("""
         border: none;
         font-weight: bold;
     }
-    /* Debug ve Hata Kutuları için Beyaz Arkaplan */
-    .stAlert, .stJson, .stCode {
+    /* Debug Kutusu Okunabilirliği */
+    .stCode {
+        background-color: #f0f0f0 !important;
+        color: #000000 !important;
+    }
+    .stAlert {
         background-color: #ffffff !important;
-        color: #000000 !important; 
+        color: #000000 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -87,18 +91,18 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUAL AI İSTEĞİ (STABLE V1 ENDPOINT) ---
+# --- MANUEL AI İSTEĞİ (FLASH 1.5 İÇİN V1BETA KULLANIYORUZ) ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
-    # DEĞİŞİKLİK BURADA: 'v1beta' YERİNE 'v1' KULLANIYORUZ.
-    # Model: 'gemini-pro' (En kararlı sürüm)
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    # MODEL: gemini-1.5-flash
+    # ENDPOINT: v1beta (Flash genelde buradadır)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt_text}]}],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": 1000
+            "maxOutputTokens": 2000
         },
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -124,8 +128,8 @@ def get_gemini_json(prompt):
     Task: Convert user question to JSON.
     
     RULES:
-    1. If user asks for a specific date (e.g. "2 Dec 2025"), YOU MUST USE THAT DATE.
-    2. Format: "YYYY-MM-DD".
+    1. If user asks for a specific date (e.g. "2 Dec 2025"), USE THAT EXACT DATE for both start_date and end_date.
+    2. Do NOT use 'today' if a date is specified.
     3. Output ONLY valid JSON.
     
     Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
@@ -144,7 +148,6 @@ def get_gemini_json(prompt):
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
             
-            # Emniyet: Tarih yoksa bugünü ekle
             if "date_ranges" not in parsed:
                  parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
                  
@@ -207,13 +210,13 @@ with st.sidebar:
         st.success(f"✅ {selected_brand}")
         st.markdown("---")
         
-        if st.button("🧹 SİSTEMİ SIFIRLA"):
+        if st.button("🗑️ SİSTEMİ SIFIRLA"):
             st.session_state.clear()
             st.rerun()
     else:
         st.error("Marka bulunamadı. Robotu ekleyin.")
 
-st.subheader("PlanB GA4 Whisperer")
+st.subheader("PlanB GA4 Whisperer (Flash)")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -245,12 +248,10 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
-                        # JSON'ı temiz ve görünür şekilde bas
-                        with st.expander("Teknik Detay (Kullanılan Kod)"):
+                        with st.expander("Teknik Detay (JSON)"):
                              st.json(query_json)
                 else:
                     st.error("⚠️ AI Bağlantı Hatası.")
-                    # Hata mesajını temiz ve görünür şekilde bas
                     with st.expander("Debug Bilgisi (API Cevabı)"):
                         st.code(raw_response)
 
