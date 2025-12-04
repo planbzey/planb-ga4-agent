@@ -77,6 +77,9 @@ if "last_data" not in st.session_state:
     st.session_state.last_data = None
 if "active_model_name" not in st.session_state:
     st.session_state.active_model_name = None
+# SON SORUYU DA HAFIZADA TUTALIM
+if "last_prompt" not in st.session_state:
+    st.session_state.last_prompt = "Rapor"
 
 # --- FONKSİYONLAR ---
 def get_ga4_properties():
@@ -95,55 +98,42 @@ def get_ga4_properties():
 
 # --- 1. ADIM: ÇALIŞAN MODELİ BUL ---
 def find_best_model():
-    """API Anahtarının yetkili olduğu modelleri listeler ve ilkini seçer."""
     if st.session_state.active_model_name:
-        return st.session_state.active_model_name
+        return st.session_state.active_model_name, None
         
-    # Model listesini çekmek için v1beta endpoint'ini kullanıyoruz
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     try:
         resp = requests.get(url)
         data = resp.json()
         
-        # Hata varsa dön
         if "error" in data:
-            return None
+            return None, f"API Key Hatası: {data['error']['message']}"
             
-        # Modelleri tara
         if "models" in data:
             for m in data['models']:
-                # Sadece içerik üretebilen (generateContent) modelleri al
                 if "generateContent" in m.get("supportedGenerationMethods", []):
-                    # 'gemini' içeren ilk modeli kap (örn: models/gemini-1.5-flash)
                     if "gemini" in m["name"]:
-                        found_name = m["name"].replace("models/", "") # 'models/' kısmını temizle
+                        found_name = m["name"].replace("models/", "")
                         st.session_state.active_model_name = found_name
-                        return found_name
+                        return found_name, None
             
-            # Eğer gemini bulamazsa listenin ilkini al
             first_model = data['models'][0]['name'].replace("models/", "")
             st.session_state.active_model_name = first_model
-            return first_model
+            return first_model, None
             
-    except Exception:
-        pass
+    except Exception as e:
+        return None, str(e)
     
-    # Hiçbir şey bulamazsa varsayılanı döndür (Fallback)
-    return "gemini-1.5-flash"
+    return "gemini-1.5-flash", None
 
 # --- 2. ADIM: DİNAMİK MODEL İLE İSTEK AT ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
-    # Önce çalışan modeli bul
-    model_name = find_best_model()
-    if not model_name:
-        return "Model bulunamadı veya API hatası."
-
-    # Model ismine göre endpoint seçimi (Basit mantık)
-    # Genellikle yeni modeller v1beta, eskiler v1'de çalışır ama v1beta genelde hepsini kapsar.
-    endpoint_version = "v1beta" 
+    model_name, error = find_best_model()
     
-    # URL dinamik olarak seçilen modeli kullanır
-    url = f"https://generativelanguage.googleapis.com/{endpoint_version}/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    if error:
+        return f"Model Error: {error}"
+        
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
     
     headers = {'Content-Type': 'application/json'}
     data = {
@@ -225,10 +215,13 @@ def run_ga4_report(prop_id, query):
         data.append(item)
     return pd.DataFrame(data)
 
-def export_to_sheet(df, prompt):
+def export_to_sheet(df, prompt_text):
     gc = gspread.authorize(creds)
-    sh = gc.create(f"Rapor: {prompt[:20]}")
-    sh.sheet1.update_cell(1, 1, f"Soru: {prompt}")
+    # Hata önleyici: Eğer prompt boşsa veya None ise varsayılan başlık kullan
+    safe_title = str(prompt_text)[:20] if prompt_text else "Rapor"
+    
+    sh = gc.create(f"Rapor: {safe_title}")
+    sh.sheet1.update_cell(1, 1, f"Soru: {prompt_text}")
     sh.sheet1.update([df.columns.values.tolist()] + df.values.tolist(), 'A3')
     sh.share(None, perm_type='anyone', role='reader')
     return sh.url
@@ -239,12 +232,9 @@ with st.sidebar:
     except: st.warning("Logo yok")
     st.markdown("---")
     
-    # Aktif modeli göster (Debug için)
-    current_model = find_best_model()
-    if current_model:
-        st.success(f"🚀 Aktif Model: {current_model}")
-    else:
-        st.error("Model Bulunamadı")
+    model_name, err = find_best_model()
+    if err: st.error(err)
+    else: st.success(f"🚀 {model_name}")
 
     df_brands = get_ga4_properties()
     selected_brand_data = None
@@ -255,7 +245,6 @@ with st.sidebar:
         selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
         st.success(f"✅ {selected_brand}")
         st.markdown("---")
-        
         if st.button("🗑️ SİSTEMİ SIFIRLA"):
             st.session_state.clear()
             st.rerun()
@@ -290,6 +279,8 @@ if prompt := st.chat_input("Bir soru sor..."):
                             
                             st.session_state.messages.append({"role": "assistant", "content": summary})
                             st.session_state.last_data = df
+                            # BURADA SON SORUYU HAFIZAYA ATIYORUZ
+                            st.session_state.last_prompt = prompt
                         else:
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
@@ -298,12 +289,13 @@ if prompt := st.chat_input("Bir soru sor..."):
                              st.json(query_json)
                 else:
                     st.error("⚠️ AI JSON Üretemedi.")
-                    with st.expander("Debug Bilgisi (API Cevabı)"):
+                    with st.expander("Debug"):
                         st.code(raw_response)
 
 if st.session_state.last_data is not None:
     if st.button("📂 Sheets'e Aktar"):
         with st.spinner("Aktarılıyor..."):
-            url = export_to_sheet(st.session_state.last_data, prompt)
+            # DÜZELTİLDİ: prompt yerine session_state'deki last_prompt kullanılıyor
+            url = export_to_sheet(st.session_state.last_data, st.session_state.last_prompt)
             st.success("Bitti!")
             st.markdown(f"[👉 Aç]({url})")
