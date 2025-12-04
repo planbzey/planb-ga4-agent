@@ -50,7 +50,6 @@ st.markdown("""
 # --- AYARLAR ---
 try:
     GEMINI_API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
-    
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
         creds_dict,
@@ -67,8 +66,6 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_data" not in st.session_state:
     st.session_state.last_data = None
-if "last_prompt" not in st.session_state:
-    st.session_state.last_prompt = ""
 
 # --- FONKSİYONLAR ---
 def get_ga4_properties():
@@ -85,11 +82,9 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUEL AI İSTEĞİ (DÜZELTİLDİ: gemini-pro) ---
+# --- MANUEL AI İSTEĞİ (gemini-pro) ---
 def ask_gemini_raw(prompt_text):
-    # BURASI DEĞİŞTİ: 1.5-flash yerine 'gemini-pro' kullanıyoruz. Kesin çalışır.
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-    
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -100,13 +95,11 @@ def ask_gemini_raw(prompt_text):
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
         ]
     }
-    
     try:
         response = requests.post(url, headers=headers, json=data)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            # Hata dönerse ekrana basalım
             return f"API Error: {response.text}"
     except Exception as e:
         return f"Request Failed: {e}"
@@ -114,34 +107,31 @@ def ask_gemini_raw(prompt_text):
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
+    # --- PROMPT GÜNCELLENDİ: "TODAY" YASAKLANDI ---
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
     Task: Convert user question to JSON.
     
-    RULES:
-    1. Even if date is FUTURE (2025, 2026), generate the JSON.
-    2. If specific day (e.g. "2 Dec"), start_date = end_date.
-    3. Output ONLY JSON. 
-    4. Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
+    STRICT DATE RULES:
+    1. EXTRACT the date from user prompt EXACTLY.
+    2. If user says "2 December 2025", start_date AND end_date MUST be "2025-12-02".
+    3. DO NOT use 'today' or 'yesterday' if user provided a specific date.
+    4. Even if the date is in the FUTURE (2025, 2030), USE THAT DATE. Do not argue.
     
-    Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
+    Output ONLY JSON.
+    Example for '2 Dec 2025': {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "totalRevenue"}}]}}
     """
     
-    full_prompt = f"{sys_prompt}\nReq: {prompt}"
-    
+    full_prompt = f"{sys_prompt}\nUser Query: {prompt}"
     raw_text = ask_gemini_raw(full_prompt)
     
-    # --- GÜÇLENDİRİLMİŞ JSON AYIKLAMA ---
     try:
-        # 1. JSON Regex
         match = re.search(r"\{[\s\S]*\}", raw_text)
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
-            
-            # 2. Eksik anahtar kontrolü
+            # Eğer yapay zeka tarih koymadıysa hata verelim ki 'today' kullanmasın
             if "date_ranges" not in parsed:
-                 parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
-            
+                 return None, "AI tarih aralığı üretmedi."
             return parsed, raw_text
         return None, raw_text
     except Exception as e:
@@ -149,16 +139,17 @@ def get_gemini_json(prompt):
 
 def get_gemini_summary(df, prompt):
     data_sample = df.head(10).to_string()
-    full_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz. Finansal yorum yap."
+    full_prompt = f"Soru: '{prompt}'. Veri:\n{data_sample}\n\nKısa özet yaz."
     return ask_gemini_raw(full_prompt)
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
     
-    # Hata önleyici kontrol
     dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
     metrics = [{"name": m['name']} for m in query.get('metrics', [])]
-    date_ranges = [query.get('date_ranges', [{"start_date": "today", "end_date": "today"}])[0]]
+    
+    # Artık fallback yok, direkt JSON'dan geleni kullanıyoruz
+    date_ranges = [query['date_ranges'][0]] 
     
     req = RunReportRequest(
         property=f"properties/{prop_id}",
@@ -206,7 +197,7 @@ with st.sidebar:
             st.session_state.clear()
             st.rerun()
     else:
-        st.error("Marka bulunamadı. Robotu ekleyin.")
+        st.error("Marka bulunamadı.")
 
 st.subheader("PlanB GA4 Whisperer")
 
@@ -236,21 +227,20 @@ if prompt := st.chat_input("Bir soru sor..."):
                             
                             st.session_state.messages.append({"role": "assistant", "content": summary})
                             st.session_state.last_data = df
-                            st.session_state.last_prompt = prompt
                         else:
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
-                        with st.expander("Teknik Detay"):
-                             st.json(query_json)
+                        with st.expander("Sorgulanan Tarih"):
+                            st.json(query_json) # Hangi tarihi sorguladığını buradan görebilirsin
                 else:
-                    st.error("⚠️ AI JSON Üretemedi.")
+                    st.error("⚠️ AI Tarihi Anlayamadı.")
                     with st.expander("Debug Bilgisi"):
                         st.text(raw_response)
 
 if st.session_state.last_data is not None:
     if st.button("📂 Sheets'e Aktar"):
         with st.spinner("Aktarılıyor..."):
-            url = export_to_sheet(st.session_state.last_data, st.session_state.last_prompt)
+            url = export_to_sheet(st.session_state.last_data, prompt)
             st.success("Bitti!")
             st.markdown(f"[👉 Aç]({url})")
