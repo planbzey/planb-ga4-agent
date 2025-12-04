@@ -6,8 +6,8 @@ import re
 import datetime 
 import requests 
 from google.oauth2 import service_account
-from google.analytics.data_v1beta import BetaAnalyticsDataClient
-from google.analytics.data_v1beta.types import RunReportRequest
+from google.analytics.data_v1 import BetaAnalyticsDataClient
+from google.analytics.data_v1.types import RunReportRequest
 from google.analytics.admin import AnalyticsAdminServiceClient
 import time
 
@@ -91,11 +91,11 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUEL AI İSTEĞİ (FLASH 1.5 İÇİN V1BETA KULLANIYORUZ) ---
+# --- MANUEL AI İSTEĞİ (FLASH 1.5 İÇİN V1 KULLANIYORUZ) ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
     # MODEL: gemini-1.5-flash
-    # ENDPOINT: v1beta (Flash genelde buradadır)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # ENDPOINT: v1 (Flash genelde buradadır)
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     headers = {'Content-Type': 'application/json'}
     data = {
