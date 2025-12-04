@@ -6,8 +6,8 @@ import re
 import datetime 
 import requests 
 from google.oauth2 import service_account
-from google.analytics.data_v1 import BetaAnalyticsDataClient
-from google.analytics.data_v1.types import RunReportRequest
+from google.analytics.data_v1beta import BetaAnalyticsDataClient
+from google.analytics.data_v1beta.types import RunReportRequest
 from google.analytics.admin import AnalyticsAdminServiceClient
 import time
 
@@ -75,6 +75,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_data" not in st.session_state:
     st.session_state.last_data = None
+if "active_model_name" not in st.session_state:
+    st.session_state.active_model_name = None
 
 # --- FONKSİYONLAR ---
 def get_ga4_properties():
@@ -91,11 +93,57 @@ def get_ga4_properties():
     except Exception as e:
         return pd.DataFrame()
 
-# --- MANUEL AI İSTEĞİ (FLASH 1.5 İÇİN V1 KULLANIYORUZ) ---
+# --- 1. ADIM: ÇALIŞAN MODELİ BUL ---
+def find_best_model():
+    """API Anahtarının yetkili olduğu modelleri listeler ve ilkini seçer."""
+    if st.session_state.active_model_name:
+        return st.session_state.active_model_name
+        
+    # Model listesini çekmek için v1beta endpoint'ini kullanıyoruz
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    try:
+        resp = requests.get(url)
+        data = resp.json()
+        
+        # Hata varsa dön
+        if "error" in data:
+            return None
+            
+        # Modelleri tara
+        if "models" in data:
+            for m in data['models']:
+                # Sadece içerik üretebilen (generateContent) modelleri al
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    # 'gemini' içeren ilk modeli kap (örn: models/gemini-1.5-flash)
+                    if "gemini" in m["name"]:
+                        found_name = m["name"].replace("models/", "") # 'models/' kısmını temizle
+                        st.session_state.active_model_name = found_name
+                        return found_name
+            
+            # Eğer gemini bulamazsa listenin ilkini al
+            first_model = data['models'][0]['name'].replace("models/", "")
+            st.session_state.active_model_name = first_model
+            return first_model
+            
+    except Exception:
+        pass
+    
+    # Hiçbir şey bulamazsa varsayılanı döndür (Fallback)
+    return "gemini-1.5-flash"
+
+# --- 2. ADIM: DİNAMİK MODEL İLE İSTEK AT ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
-    # MODEL: gemini-1.5-flash
-    # ENDPOINT: v1 (Flash genelde buradadır)
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # Önce çalışan modeli bul
+    model_name = find_best_model()
+    if not model_name:
+        return "Model bulunamadı veya API hatası."
+
+    # Model ismine göre endpoint seçimi (Basit mantık)
+    # Genellikle yeni modeller v1beta, eskiler v1'de çalışır ama v1beta genelde hepsini kapsar.
+    endpoint_version = "v1beta" 
+    
+    # URL dinamik olarak seçilen modeli kullanır
+    url = f"https://generativelanguage.googleapis.com/{endpoint_version}/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
     
     headers = {'Content-Type': 'application/json'}
     data = {
@@ -117,7 +165,7 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"API ERROR ({response.status_code}): {response.text}"
+            return f"API ERROR ({model_name}): {response.text}"
     except Exception as e:
         return f"Request Failed: {e}"
 
@@ -128,29 +176,23 @@ def get_gemini_json(prompt):
     Task: Convert user question to JSON.
     
     RULES:
-    1. If user asks for a specific date (e.g. "2 Dec 2025"), USE THAT EXACT DATE for both start_date and end_date.
-    2. Do NOT use 'today' if a date is specified.
-    3. Output ONLY valid JSON.
-    
-    Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
+    1. If user says specific date (e.g. "2 Dec 2025"), USE THAT EXACT DATE for both start_date and end_date.
+    2. Output ONLY JSON.
+    3. Metrics: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
     
     Example: {{"date_ranges": [{{"start_date": "2025-12-02", "end_date": "2025-12-02"}}], "dimensions": [{{"name": "itemName"}}], "metrics": [{{"name": "itemsPurchased"}}]}}
     """
     
-    full_prompt = f"{sys_prompt}\nUser: {prompt}\nJSON:"
-    
+    full_prompt = f"{sys_prompt}\nReq: {prompt}"
     raw_text = ask_gemini_raw(full_prompt, temperature=0.0)
     
-    # JSON AYIKLAMA
     try:
         match = re.search(r"\{[\s\S]*\}", raw_text)
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
-            
             if "date_ranges" not in parsed:
                  parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
-                 
             return parsed, raw_text
         return None, raw_text
     except Exception as e:
@@ -163,7 +205,6 @@ def get_gemini_summary(df, prompt):
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
-    
     dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
     metrics = [{"name": m['name']} for m in query.get('metrics', [])]
     date_ranges = [query['date_ranges'][0]]
@@ -179,10 +220,8 @@ def run_ga4_report(prop_id, query):
     data = []
     for row in res.rows:
         item = {}
-        for i, dim in enumerate(dimensions): 
-            item[dim['name']] = row.dimension_values[i].value
-        for i, met in enumerate(metrics): 
-            item[met['name']] = row.metric_values[i].value
+        for i, dim in enumerate(dimensions): item[dim['name']] = row.dimension_values[i].value
+        for i, met in enumerate(metrics): item[met['name']] = row.metric_values[i].value
         data.append(item)
     return pd.DataFrame(data)
 
@@ -200,6 +239,13 @@ with st.sidebar:
     except: st.warning("Logo yok")
     st.markdown("---")
     
+    # Aktif modeli göster (Debug için)
+    current_model = find_best_model()
+    if current_model:
+        st.success(f"🚀 Aktif Model: {current_model}")
+    else:
+        st.error("Model Bulunamadı")
+
     df_brands = get_ga4_properties()
     selected_brand_data = None
     
@@ -216,7 +262,7 @@ with st.sidebar:
     else:
         st.error("Marka bulunamadı. Robotu ekleyin.")
 
-st.subheader("PlanB GA4 Whisperer (Flash)")
+st.subheader("PlanB GA4 Whisperer")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -248,10 +294,10 @@ if prompt := st.chat_input("Bir soru sor..."):
                             st.warning("Bu tarih için veri '0' döndü.")
                     except Exception as e:
                         st.error(f"GA4 Hatası: {e}")
-                        with st.expander("Teknik Detay (JSON)"):
+                        with st.expander("Teknik Detay"):
                              st.json(query_json)
                 else:
-                    st.error("⚠️ AI Bağlantı Hatası.")
+                    st.error("⚠️ AI JSON Üretemedi.")
                     with st.expander("Debug Bilgisi (API Cevabı)"):
                         st.code(raw_response)
 
