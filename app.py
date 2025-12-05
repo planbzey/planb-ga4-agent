@@ -13,54 +13,76 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="⚡", layout="wide")
 
-# --- CSS TASARIM ---
+# --- CSS TASARIM (YENİ: AÇIK GRİ TEMA) ---
 st.markdown("""
 <style>
-    /* SOHBET BALONLARI */
+    /* 1. GENEL ARKA PLAN (Hafif Buz Grisi) */
+    .stApp {
+        background-color: #f4f6f9;
+    }
+
+    /* 2. YAN MENÜ (Beyaz ve Temiz) */
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e0e0e0;
+    }
+    /* Yan Menü Yazı Rengi (Koyu Gri - Okunabilir) */
+    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p, [data-testid="stSidebar"] label {
+        color: #31333F !important;
+    }
+    
+    /* 3. SOHBET BALONLARI */
     .stChatMessage {
         background-color: #ffffff !important;
-        border-radius: 15px;
-        padding: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        margin-bottom: 10px;
-        border: 1px solid #e0e0e0;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05); /* Yumuşak Gölge */
+        margin-bottom: 15px;
+        border: 1px solid #e6e6e6;
     }
     [data-testid="stChatMessage"] * {
-        color: #000000 !important;
+        color: #31333F !important;
     }
+    /* Kullanıcı/Asistan İkonu */
     .stChatMessage .stAvatar {
         background-color: #ff4b4b !important;
         color: white !important;
     }
-    
-    /* YAN MENÜ */
-    [data-testid="stSidebar"] {
-        background-color: #000000;
-    }
-    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p {
-        color: #ffffff !important;
-    }
-    
-    /* TABLO İKONLARI BEYAZ */
+
+    /* 4. TABLO İKONLARI (Koyu Renk - Beyaz zeminde görünsün diye) */
     [data-testid="stDataFrame"] button {
-        color: #ffffff !important; 
+        color: #31333F !important; 
     }
     [data-testid="stDataFrame"] svg {
-        fill: #ffffff !important;
+        fill: #31333F !important;
     }
-    
-    /* BUTONLAR */
+
+    /* 5. BUTONLAR */
     .stButton>button {
         background-color: #ff4b4b;
         color: white !important;
         border: none;
-        font-weight: bold;
+        font-weight: 600;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        transition: all 0.3s ease;
     }
-    
-    /* Debug Kutuları */
+    .stButton>button:hover {
+        background-color: #d93b3b;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+
+    /* 6. DEBUG VE HATA KUTULARI */
     .stCode, .stAlert {
         background-color: #ffffff !important;
-        color: #000000 !important;
+        border: 1px solid #e0e0e0;
+        color: #31333F !important;
+    }
+    
+    /* Başlıklar */
+    h1, h2, h3 {
+        color: #31333F !important;
+        font-family: 'Helvetica Neue', sans-serif;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -153,7 +175,7 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
     except Exception as e:
         return f"Request Failed: {e}"
 
-# 4. JSON DÖNÜŞTÜRÜCÜ (AKILLI TARİH)
+# 4. JSON DÖNÜŞTÜRÜCÜ
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
@@ -185,7 +207,6 @@ def get_gemini_json(prompt):
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
-            # Varsayılan tarih koruması
             if "date_ranges" not in parsed:
                  parsed["date_ranges"] = [{"start_date": "28daysAgo", "end_date": "yesterday"}]
             return parsed, raw_text
@@ -238,7 +259,7 @@ with st.sidebar:
     if not df_hierarchy.empty:
         # HESAP SEÇİMİ
         unique_accounts = sorted(df_hierarchy['Account_Name'].unique())
-        selected_account = st.selectbox("📂 Hesap (Müşteri) Seç:", unique_accounts)
+        selected_account = st.selectbox("📂 Müşteri Seç:", unique_accounts)
         
         # MÜLK SEÇİMİ
         filtered_properties = df_hierarchy[df_hierarchy['Account_Name'] == selected_account]
@@ -270,7 +291,7 @@ if prompt := st.chat_input("Bir soru sor..."):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analiz..."):
+            with st.spinner("Veriler çekiliyor..."):
                 query_json, raw_response = get_gemini_json(prompt)
                 
                 if query_json:
@@ -292,6 +313,6 @@ if prompt := st.chat_input("Bir soru sor..."):
                         with st.expander("Teknik Detay"):
                              st.json(query_json)
                 else:
-                    st.error("⚠️ AI JSON Üretemedi.")
+                    st.error("⚠️ AI Soruyu Anlayamadı.")
                     with st.expander("Debug"):
                         st.code(raw_response)
