@@ -225,4 +225,99 @@ def get_gemini_summary(df, prompt):
     return ask_gemini_raw(full_prompt, temperature=0.5)
 
 def run_ga4_report(prop_id, query):
-    client = BetaAnalyticsData
+    client = BetaAnalyticsDataClient(credentials=creds)
+    dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
+    metrics = [{"name": m['name']} for m in query.get('metrics', [])]
+    date_ranges = [query['date_ranges'][0]]
+    
+    req = RunReportRequest(
+        property=f"properties/{prop_id}",
+        dimensions=dimensions,
+        metrics=metrics,
+        date_ranges=date_ranges,
+        limit=query.get('limit', 1000)
+    )
+    res = client.run_report(req)
+    data = []
+    for row in res.rows:
+        item = {}
+        for i, dim in enumerate(dimensions): item[dim['name']] = row.dimension_values[i].value
+        for i, met in enumerate(metrics): 
+            try: item[met['name']] = float(row.metric_values[i].value)
+            except: item[met['name']] = row.metric_values[i].value
+        data.append(item)
+    return pd.DataFrame(data)
+
+# --- ARAYÜZ ---
+with st.sidebar:
+    try: st.image("logo.png", use_container_width=True) 
+    except: st.warning("Logo yok")
+    st.markdown("---")
+    
+    model_name, err = find_best_model()
+    if err: st.error(err)
+    else: st.success(f"🚀 {model_name}")
+
+    df_hierarchy = get_ga4_hierarchy()
+    selected_brand_data = None
+    
+    if not df_hierarchy.empty:
+        # HESAP SEÇİMİ
+        unique_accounts = sorted(df_hierarchy['Account_Name'].unique())
+        selected_account = st.selectbox("📂 Müşteri Seç:", unique_accounts)
+        
+        # MÜLK SEÇİMİ
+        filtered_properties = df_hierarchy[df_hierarchy['Account_Name'] == selected_account]
+        property_list = sorted(filtered_properties['Property_Name'].tolist())
+        selected_property = st.selectbox("📊 Mülk Seç:", property_list)
+        
+        selected_brand_data = filtered_properties[filtered_properties['Property_Name'] == selected_property].iloc[0]
+        st.success(f"✅ {selected_property}")
+        
+        st.markdown("---")
+        if st.button("🗑️ SİSTEMİ SIFIRLA"):
+            st.session_state.clear()
+            st.rerun()
+    else:
+        st.error("Hesap bulunamadı.")
+
+st.subheader("PlanB GA4 Whisperer")
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("Bir soru sor..."):
+    if selected_brand_data is None:
+        st.error("Lütfen sol menüden bir Mülk seçin.")
+    else:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Analiz..."):
+                query_json, raw_response = get_gemini_json(prompt)
+                
+                if query_json:
+                    try:
+                        df = run_ga4_report(str(selected_brand_data['GA4_Property_ID']), query_json)
+                        if not df.empty:
+                            summary = get_gemini_summary(df, prompt)
+                            st.markdown(summary)
+                            
+                            # TABLO
+                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            
+                            st.session_state.messages.append({"role": "assistant", "content": summary})
+                            st.session_state.last_data = df
+                        else:
+                            st.warning("Bu tarih için veri henüz oluşmamış veya '0' dönüyor.")
+                    except Exception as e:
+                        st.error(f"GA4 Hatası: {e}")
+                        with st.expander("Teknik Detay"):
+                             st.json(query_json)
+                else:
+                    st.error("⚠️ AI Soruyu Anlayamadı.")
+                    with st.expander("Debug"):
+                        st.code(raw_response)
