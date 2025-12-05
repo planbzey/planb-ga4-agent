@@ -13,45 +13,39 @@ from google.analytics.admin import AnalyticsAdminServiceClient
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="⚡", layout="wide")
 
-# --- CSS İLE MODERN MAKYAJ ---
+# --- CSS (RENK VE YAZI DÜZELTİLDİ) ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f8f9fa; }
+    /* Arka plan zorlamasını kaldırdım, temanı bozmayacak */
+    
+    /* Sohbet Baloncukları - İÇİNDEKİ YAZIYI SİYAH YAPTIK */
     .stChatMessage {
-        background-color: #ffffff !important;
-        border-radius: 20px;
+        background-color: #f0f2f6 !important; /* Hafif gri baloncuk */
+        border-radius: 15px;
         padding: 15px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        border: 1px solid #eee;
-        margin-bottom: 15px;
+        margin-bottom: 10px;
+        border: 1px solid #e0e0e0;
     }
+    
+    /* Baloncuk içindeki yazılar KESİN SİYAH olsun */
+    .stChatMessage p, .stChatMessage li, .stChatMessage div {
+        color: #000000 !important;
+    }
+
+    /* Kullanıcı Mesajı (Sağ taraf hissi için renkli) */
     [data-testid="stChatMessage"][data-testid="user"] {
-        background-color: #e3f2fd !important;
-        border-bottom-right-radius: 5px;
+        background-color: #e3f2fd !important; /* Açık mavi */
     }
-    [data-testid="stChatMessage"][data-testid="assistant"] {
-        border-bottom-left-radius: 5px;
+
+    /* Sidebar Yazıları */
+    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p {
+        color: #ffffff !important; /* Sidebar koyu ise yazı beyaz kalsın */
     }
-    [data-testid="stSidebar"] { background-color: #1e1e1e; }
-    [data-testid="stSidebar"] *, [data-testid="stSidebar"] p { color: #e0e0e0 !important; }
+    
+    /* Butonlar */
     .stButton>button {
-        border-radius: 20px;
-        border: 1px solid #ddd;
-        background-color: white;
-        color: #333;
-        font-weight: 500;
         width: 100%;
-        transition: all 0.3s;
-    }
-    .stButton>button:hover {
-        border-color: #ff4b4b;
-        color: #ff4b4b;
-        background-color: #fff0f0;
-    }
-    [data-testid="stDataFrame"] {
         border-radius: 10px;
-        overflow: hidden;
-        border: 1px solid #eee;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -76,7 +70,7 @@ if "messages" not in st.session_state:
 if "last_data" not in st.session_state:
     st.session_state.last_data = None
 if "active_model_name" not in st.session_state:
-    st.session_state.active_model_name = "gemini-1.5-flash"
+    st.session_state.active_model_name = None # Başlangıçta boş, otomatik bulacak
 if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = "Rapor"
 
@@ -84,10 +78,9 @@ if "last_prompt" not in st.session_state:
 def auto_visualize(df):
     columns = [c.lower() for c in df.columns]
     
-    # Eğer Cihaz, Şehir gibi kategorik veriler varsa Pasta Grafiği çizelim
+    # Kategorik Dağılım (Pasta/Bar)
     categorical_cols = df.select_dtypes(include=['object']).columns
     if len(categorical_cols) > 0 and 'date' not in columns and 'tarih' not in columns:
-         # İlk kategorik sütunu al (örn: deviceCategory)
          cat_col = categorical_cols[0]
          numeric_cols = df.select_dtypes(include=['number']).columns
          if len(numeric_cols) > 0:
@@ -95,7 +88,7 @@ def auto_visualize(df):
              st.bar_chart(df, x=cat_col, y=numeric_cols[0])
              return
 
-    # Zaman grafiği kontrolü
+    # Zaman Grafiği
     if any(x in columns for x in ['date', 'tarih', 'yearmonth', 'gün', 'day']):
         numeric_cols = df.select_dtypes(include=['number']).columns
         if len(numeric_cols) > 0:
@@ -103,9 +96,50 @@ def auto_visualize(df):
             st.line_chart(df, y=numeric_cols)
             return
 
-# --- GEMINI & GA4 FONKSİYONLARI ---
+# --- 1. ADIM: OTOMATİK MODEL BULUCU (GERİ GELDİ) ---
+def find_best_model():
+    # Eğer zaten bulduysak tekrar sorma
+    if st.session_state.active_model_name:
+        return st.session_state.active_model_name, None
+        
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    try:
+        resp = requests.get(url)
+        data = resp.json()
+        
+        if "error" in data:
+            return None, f"API Key Hatası: {data['error']['message']}"
+            
+        if "models" in data:
+            # Önce kullanıcı 'gemini-2.5' gibi bir şey istiyorsa en yenileri yukarı alalım
+            # Buradaki mantık: Listeyi tara, içinde 'gemini' geçen ve 'generateContent' destekleyenleri al
+            valid_models = []
+            for m in data['models']:
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    if "gemini" in m["name"]:
+                        valid_models.append(m["name"].replace("models/", ""))
+            
+            # En günceli bulmaya çalış (Basitçe listenin başındakini veya varsa flash/pro'yu seç)
+            # Genelde Google en yeniyi listeye ekler. Biz varsa flash'i tercih edelim hız için.
+            if valid_models:
+                # Varsa 1.5-flash veya pro'yu önceliklendir, yoksa ilkini al
+                selected = next((m for m in valid_models if "flash" in m), valid_models[0])
+                st.session_state.active_model_name = selected
+                return selected, None
+            
+    except Exception as e:
+        return None, str(e)
+    
+    # Hiçbir şey bulamazsa fallback
+    return "gemini-1.5-flash", None
+
+# --- GEMINI İSTEK ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # Dinamik modeli al
+    model_name, error = find_best_model()
+    if error: return f"Model Error: {error}"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -116,14 +150,13 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"Hata: {response.text}"
+            return f"API ERROR ({model_name}): {response.text}"
     except Exception as e:
         return f"Request Failed: {e}"
 
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
-    # PROMPT GÜNCELLENDİ: Cihaz ve Metrik tanımları netleştirildi
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
 Task: Convert user question to JSON for GA4 report.
 RULES:
@@ -132,13 +165,6 @@ RULES:
 3. If user asks for 'cities', 'location' -> Use dimension: 'city'.
 4. Always include at least one METRIC (e.g., activeUsers, sessions, totalRevenue).
 5. Always include at least one DIMENSION (e.g., date, deviceCategory, city).
-
-Example JSON: 
-{{
-  "date_ranges": [{{"start_date": "30daysAgo", "end_date": "today"}}], 
-  "dimensions": [{{"name": "deviceCategory"}}], 
-  "metrics": [{{"name": "activeUsers"}}]
-}}
 """
     full_prompt = f"{sys_prompt}\nReq: {prompt}"
     raw_text = ask_gemini_raw(full_prompt)
@@ -148,16 +174,11 @@ Example JSON:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
             
-            # --- EMNİYET KEMERİ (Bug Fix) ---
-            # Eğer boyut (dimension) eksikse tarih ekle
+            # --- EMNİYET KEMERİ (400 Hatası Önleyici) ---
             if "dimensions" not in parsed or not parsed["dimensions"]:
                 parsed["dimensions"] = [{"name": "date"}]
-            
-            # Eğer metrik (metric) eksikse kullanıcı sayısı ekle
             if "metrics" not in parsed or not parsed["metrics"]:
                 parsed["metrics"] = [{"name": "activeUsers"}]
-                
-            # Tarih aralığı eksikse bugünü ekle
             if "date_ranges" not in parsed: 
                 parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
                 
@@ -168,16 +189,16 @@ Example JSON:
 
 def get_gemini_summary(df, prompt):
     data_sample = df.head(10).to_string()
-    full_prompt = f"Kullanıcı Sorusu: '{prompt}'. \nGA4 Verisi:\n{data_sample}\n\nBu veriyi bir yöneticiye sunar gibi 2-3 cümleyle, emojiler kullanarak özetle. Trendleri vurgula."
+    full_prompt = f"Kullanıcı Sorusu: '{prompt}'. \nGA4 Verisi:\n{data_sample}\n\nBu veriyi bir yöneticiye sunar gibi 2-3 cümleyle, emojiler kullanarak özetle."
     return ask_gemini_raw(full_prompt, temperature=0.7)
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
     
-    # API'ye boş liste gitmesini engelle
     dims = query.get('dimensions', [])
     mets = query.get('metrics', [])
     
+    # İkinci kontrol
     if not dims: dims = [{"name": "date"}]
     if not mets: mets = [{"name": "activeUsers"}]
 
@@ -226,6 +247,12 @@ def get_ga4_properties():
 # --- SIDEBAR & MARKA SEÇİMİ ---
 with st.sidebar:
     st.title("⚙️ Kontrol")
+    
+    # Model Bulucu Göstergesi
+    model_name, err = find_best_model()
+    if err: st.error(err)
+    else: st.caption(f"🚀 Aktif Model: {model_name}")
+
     df_brands = get_ga4_properties()
     selected_brand_data = None
     
@@ -233,7 +260,7 @@ with st.sidebar:
         brand_list = sorted(df_brands['Marka Adi'].tolist())
         selected_brand = st.selectbox("Marka Seç:", brand_list)
         selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
-        st.success(f"Aktif: {selected_brand}")
+        st.success(f"Seçildi: {selected_brand}")
     else:
         st.error("Marka Bulunamadı")
     
@@ -245,8 +272,8 @@ with st.sidebar:
 
 # --- ANA EKRAN ---
 st.title("🤖 GA4 Asistanı")
-st.caption("Verilerle sohbet edin. Grafik ve tablolar anında hazır.")
 
+# Hızlı Butonlar
 col1, col2, col3, col4 = st.columns(4)
 quick_prompt = None
 if col1.button("📅 Dün Durum?"): quick_prompt = "Dünkü toplam kullanıcı, oturum ve geliri getir"
@@ -271,7 +298,7 @@ if prompt:
 
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            with st.spinner("Veriler çekiliyor..."):
+            with st.spinner(f"Veriler çekiliyor ({model_name})..."):
                 query_json, raw_res = get_gemini_json(prompt)
                 
                 if query_json:
