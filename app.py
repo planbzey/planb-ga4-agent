@@ -11,78 +11,85 @@ from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest
 from google.analytics.admin import AnalyticsAdminServiceClient
 
-# --- SAYFA AYARLARI ---
+# --- 1. SAYFA AYARLARI (EN BAŞTA) ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="🔒", layout="wide")
 
 # ==========================================
-# 🔐 GÜVENLİK DUVARI (PASSWORD PROTECTION)
+# 🔐 GÜVENLİK DUVARI
 # ==========================================
 def check_password():
-    """Returns `True` if the user had the correct password."""
-
+    """Şifre kontrolü yapar."""
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == st.secrets["general"]["APP_PASSWORD"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Şifreyi hafızadan sil (güvenlik)
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
-    # Şifre daha önce doğrulanmadıysa:
     if "password_correct" not in st.session_state:
-        # İlk giriş ekranı
-        st.text_input(
-            "🔑 Lütfen Giriş Şifresini Yazın:", 
-            type="password", 
-            on_change=password_entered, 
-            key="password"
-        )
-        st.error("Giriş yapmadan verileri göremezsiniz.")
+        st.text_input("🔑 Lütfen Giriş Şifresini Yazın:", type="password", on_change=password_entered, key="password")
         return False
-    
-    # Şifre yanlış girildiyse:
     elif not st.session_state["password_correct"]:
-        st.text_input(
-            "🔑 Lütfen Giriş Şifresini Yazın:", 
-            type="password", 
-            on_change=password_entered, 
-            key="password"
-        )
-        st.error("😕 Hatalı şifre. Tekrar deneyin.")
+        st.text_input("🔑 Lütfen Giriş Şifresini Yazın:", type="password", on_change=password_entered, key="password")
+        st.error("😕 Hatalı şifre.")
         return False
-    
-    # Şifre doğruysa:
     else:
         return True
 
-# Eğer şifre doğru değilse, kodun geri kalanını okuma, BURADA DUR.
 if not check_password():
     st.stop()
 
 # ==========================================
-# 🚀 UYGULAMA BAŞLANGICI (ŞİFRE DOĞRUYSA)
+# 🎨 TASARIM VE CSS (GÖRÜNÜM AYARLARI)
 # ==========================================
-
-# --- CSS STİL ---
 st.markdown("""
 <style>
+    /* Genel Arka Plan */
     .stApp { background-color: #f8f9fa; }
+    
+    /* Sohbet Baloncukları */
     .stChatMessage {
         background-color: #ffffff !important;
         border-radius: 20px;
         padding: 15px;
         margin-bottom: 10px;
         border: 1px solid #e0e0e0;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
-    .stChatMessage p, .stChatMessage li, .stChatMessage div { color: #000000 !important; }
-    [data-testid="stChatMessage"][data-testid="user"] { background-color: #e3f2fd !important; }
+    
+    /* Yazı Renkleri - SİYAH ZORLAMA */
+    .stChatMessage p, .stChatMessage li, .stChatMessage div {
+        color: #000000 !important;
+    }
+
+    /* Kullanıcı Mesajı (Mavi) */
+    [data-testid="stChatMessage"][data-testid="user"] {
+        background-color: #e3f2fd !important;
+    }
+
+    /* Sidebar (Koyu Tema) */
     [data-testid="stSidebar"] { background-color: #1e1e1e; }
     [data-testid="stSidebar"] *, [data-testid="stSidebar"] p { color: #e0e0e0 !important; }
-    .stButton>button { border-radius: 10px; width: 100%; }
+    
+    /* Hızlı Butonlar */
+    .stButton>button {
+        border-radius: 12px;
+        border: 1px solid #ddd;
+        background-color: white;
+        color: #333;
+        font-weight: 500;
+        width: 100%;
+        transition: all 0.3s;
+    }
+    .stButton>button:hover {
+        border-color: #ff4b4b;
+        color: #ff4b4b;
+        background-color: #fff0f0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- AYARLAR ---
+# --- AYARLAR VE API ---
 try:
     GEMINI_API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
     creds_dict = dict(st.secrets["gcp_service_account"])
@@ -101,7 +108,8 @@ if "messages" not in st.session_state: st.session_state.messages = []
 if "last_data" not in st.session_state: st.session_state.last_data = None
 if "active_model_name" not in st.session_state: st.session_state.active_model_name = None
 
-# --- GRAFİK MOTORU ---
+# --- FONKSİYONLAR ---
+
 def auto_visualize(df):
     columns = [c.lower() for c in df.columns]
     cat_cols = df.select_dtypes(include=['object']).columns
@@ -110,7 +118,7 @@ def auto_visualize(df):
     if len(num_cols) == 0: return
 
     # Zaman Grafiği
-    if any(x in columns for x in ['date', 'tarih', 'yearmonth']):
+    if any(x in columns for x in ['date', 'tarih', 'yearmonth', 'gün']):
         st.caption("📈 Zaman Grafiği")
         st.line_chart(df, y=num_cols)
         return
@@ -120,7 +128,6 @@ def auto_visualize(df):
         st.caption(f"📊 {cat_cols[0]} Dağılımı")
         st.bar_chart(df, x=cat_cols[0], y=num_cols[0])
 
-# --- MODEL SEÇİCİ ---
 def find_best_model():
     if st.session_state.active_model_name: return st.session_state.active_model_name, None
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
@@ -135,7 +142,6 @@ def find_best_model():
     except: pass
     return "gemini-1.5-flash", None
 
-# --- GEMINI İSTEK ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
     model, _ = find_best_model()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
@@ -147,7 +153,6 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
     except: pass
     return "Error"
 
-# --- JSON MOTORU (HAFIZALI) ---
 def get_gemini_json_with_history(current_prompt, history_messages):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
@@ -159,24 +164,14 @@ def get_gemini_json_with_history(current_prompt, history_messages):
              history_text += f"{role}: {content}\n"
 
     sys_prompt = f"""You are a GA4 Expert. TODAY: {today_str}.
-    
-    HISTORY OF CONVERSATION:
-    {history_text}
-    
-    CURRENT REQUEST: {current_prompt}
-
+    HISTORY: {history_text}
+    REQUEST: {current_prompt}
     TASK:
-    1. Look at the HISTORY. If user says "convert to dollars" or "calculate", and previous data exists, do NOT output JSON. Output exactly: "CALCULATION_NEEDED".
-    2. If user says "break it down by city" or "compare", MODIFY the previous query logic found in history.
-    3. If it's a new data request, create valid JSON.
-    
-    JSON RULES:
-    - Output ONLY valid JSON.
-    - If dimensions missing -> use 'date'.
-    - If metrics missing -> use 'activeUsers'.
-    - Structure: {{"date_ranges": [...], "dimensions": [...], "metrics": [...]}}
+    1. If user asks for calculation/conversion on old data -> Output "CALCULATION_NEEDED".
+    2. If new data -> Output JSON.
+    3. If dimensions missing -> use 'date'. If metrics missing -> use 'activeUsers'.
+    Example: {{"date_ranges": [{{"start_date": "today", "end_date": "today"}}], "dimensions": [{{"name": "date"}}], "metrics": [{{"name": "activeUsers"}}]}}
     """
-    
     raw_text = ask_gemini_raw(sys_prompt)
     if "CALCULATION_NEEDED" in raw_text: return "CALC", raw_text
 
@@ -197,14 +192,7 @@ def get_gemini_chat_response(prompt, history_messages, last_data_summary):
          if isinstance(msg["content"], str):
             history_text += f"{msg['role']}: {msg['content']}\n"
     
-    full_prompt = f"""
-    CONTEXT: The user was looking at this data summary: {last_data_summary}
-    HISTORY: {history_text}
-    USER: {prompt}
-    
-    Task: The user is asking for a calculation or conversion on the previous data. 
-    Answer as a helpful assistant.
-    """
+    full_prompt = f"CONTEXT: Previous Data: {last_data_summary}\nHISTORY: {history_text}\nUSER: {prompt}\nTask: Answer the user's calculation/conversion question based on previous data. Be helpful."
     return ask_gemini_raw(full_prompt, temperature=0.7)
 
 def get_gemini_summary(df, prompt):
@@ -234,49 +222,81 @@ def run_ga4_report(prop_id, query):
 def get_ga4_properties():
     try:
         admin = AnalyticsAdminServiceClient(credentials=creds)
-        return pd.DataFrame([{"Marka Adi": s.display_name, "GA4_Property_ID": s.property.split('/')[-1]} for a in admin.list_account_summaries() for s in a.property_summaries])
+        results = []
+        for account in admin.list_account_summaries():
+            for property_summary in account.property_summaries:
+                results.append({"Marka Adi": property_summary.display_name, "GA4_Property_ID": property_summary.property.split('/')[-1]})
+        return pd.DataFrame(results)
     except: return pd.DataFrame()
 
-# --- ARAYÜZ (GÜVENLİ BÖLGE) ---
+# --- SIDEBAR (HESAP AYARLARI GERİ GELDİ) ---
 with st.sidebar:
-    st.title("🧠 Hafızalı Asistan")
+    st.title("⚙️ Kontrol Paneli")
+    
+    # Model Bilgisi
+    model_name, err = find_best_model()
+    if not err: st.caption(f"🧠 Zeka: {model_name}")
+
+    # Marka Seçimi (Tamir Edildi)
     df_brands = get_ga4_properties()
     selected_brand_data = None
+    
     if not df_brands.empty:
-        brand = st.selectbox("Marka:", sorted(df_brands['Marka Adi'].tolist()))
-        selected_brand_data = df_brands[df_brands['Marka Adi'] == brand].iloc[0]
-        st.success(f"Aktif: {brand}")
-    if st.button("🗑️ Sıfırla"):
+        brand_list = sorted(df_brands['Marka Adi'].tolist())
+        selected_brand = st.selectbox("Marka / Mülk Seç:", brand_list)
+        selected_brand_data = df_brands[df_brands['Marka Adi'] == selected_brand].iloc[0]
+        st.success(f"✅ Seçildi: {selected_brand}")
+    else:
+        st.error("Marka/Mülk Bulunamadı (Yetki Kontrolü Yapın)")
+    
+    st.markdown("---")
+    if st.button("🗑️ Sohbeti Temizle"):
         st.session_state.messages = []
         st.session_state.last_data = None
         st.rerun()
-    if st.button("🔒 Çıkış Yap"):
+        
+    if st.button("🔒 Güvenli Çıkış"):
         del st.session_state["password_correct"]
         st.rerun()
 
+# --- ANA EKRAN VE BUTONLAR ---
 st.title("🤖 GA4 Asistanı")
-st.caption("Artık 'Bunu şehirlere göre kır' veya 'Dolar yap' diyebilirsin.")
+st.caption("Verilerle konuşun, hesap yaptırın, grafik çizdirin.")
 
-# Sohbet Geçmişi
+# Hızlı Butonlar (Geri Geldi!)
+col1, col2, col3, col4 = st.columns(4)
+quick_prompt = None
+if col1.button("📅 Dün Durum?"): quick_prompt = "Dünkü toplam kullanıcı, oturum ve geliri getir"
+if col2.button("📉 Bu Hafta"): quick_prompt = "Son 7 günün gün gün kullanıcı ve gelir değişimi"
+if col3.button("🌍 Şehirler"): quick_prompt = "Geçen ay en çok gelen ilk 10 şehir (activeUsers)"
+if col4.button("📱 Cihazlar"): quick_prompt = "Son 30 günde mobil ve desktop kullanım oranları (deviceCategory)"
+
+# Sohbet Akışı
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-if prompt := st.chat_input("Sorunu yaz..."):
-    if not selected_brand_data: st.error("Marka seçin.")
+# Giriş
+prompt = st.chat_input("Bir soru sor...")
+if quick_prompt: prompt = quick_prompt
+
+if prompt:
+    if not selected_brand_data: st.error("Lütfen soldan bir marka seçin.")
     else:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Düşünüyor..."):
+            with st.spinner("Analiz yapılıyor..."):
                 query_json, raw_res = get_gemini_json_with_history(prompt, st.session_state.messages)
                 
+                # Sadece Sohbet/Hesap
                 if query_json == "CALC":
-                    last_summary = st.session_state.messages[-2]["content"] if len(st.session_state.messages) > 1 else "Yok"
-                    chat_response = get_gemini_chat_response(prompt, st.session_state.messages, last_summary)
-                    st.markdown(chat_response)
-                    st.session_state.messages.append({"role": "assistant", "content": chat_response})
+                    last_sum = st.session_state.messages[-2]["content"] if len(st.session_state.messages)>1 else ""
+                    resp = get_gemini_chat_response(prompt, st.session_state.messages, last_sum)
+                    st.markdown(resp)
+                    st.session_state.messages.append({"role": "assistant", "content": resp})
                 
+                # Veri Çekme
                 elif query_json:
                     try:
                         df = run_ga4_report(str(selected_brand_data['GA4_Property_ID']), query_json)
@@ -284,12 +304,11 @@ if prompt := st.chat_input("Sorunu yaz..."):
                             summary = get_gemini_summary(df, prompt)
                             st.markdown(summary)
                             auto_visualize(df)
-                            with st.expander("Tablo"): st.dataframe(df, use_container_width=True)
-                            
+                            with st.expander("Tablo Verisi"): st.dataframe(df, use_container_width=True)
                             st.session_state.messages.append({"role": "assistant", "content": summary})
                             st.session_state.last_data = df
                         else:
-                            st.warning("Veri bulunamadı.")
+                            st.warning("Veri yok.")
                     except Exception as e: st.error(f"Hata: {e}")
                 else:
-                    st.error("Ne dediğini tam anlayamadım.")
+                    st.error("Anlayamadım.")
