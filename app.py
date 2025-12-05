@@ -13,76 +13,81 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Whisperer", page_icon="⚡", layout="wide")
 
-# --- CSS TASARIM (YENİ: AÇIK GRİ TEMA) ---
+# --- CSS TASARIM (YENİ: TWITTER MAVİSİ & SİYAH) ---
 st.markdown("""
 <style>
-    /* 1. GENEL ARKA PLAN (Hafif Buz Grisi) */
+    /* 1. GENEL ARKA PLAN (SİYAH) */
     .stApp {
-        background-color: #f4f6f9;
+        background-color: #000000;
+        color: #ffffff;
     }
 
-    /* 2. YAN MENÜ (Beyaz ve Temiz) */
+    /* 2. YAN MENÜ (TWITTER MAVİSİ) */
     [data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e0e0e0;
+        background-color: #1DA1F2; /* Twitter Blue */
     }
-    /* Yan Menü Yazı Rengi (Koyu Gri - Okunabilir) */
+    /* Yan Menü Yazı Rengi (Beyaz) */
     [data-testid="stSidebar"] *, [data-testid="stSidebar"] p, [data-testid="stSidebar"] label {
-        color: #31333F !important;
+        color: #ffffff !important;
+    }
+    /* Selectbox vb. koyu görünsün */
+    [data-testid="stSidebar"] .stSelectbox > div > div {
+        color: #000000 !important;
     }
     
-    /* 3. SOHBET BALONLARI */
+    /* 3. SOHBET BALONLARI (KOYU GRİ) */
     .stChatMessage {
-        background-color: #ffffff !important;
+        background-color: #1c1c1c !important; /* Koyu Gri */
         border-radius: 12px;
         padding: 20px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05); /* Yumuşak Gölge */
+        border: 1px solid #333333;
         margin-bottom: 15px;
-        border: 1px solid #e6e6e6;
     }
+    /* Balon içi yazılar (Beyaz) */
     [data-testid="stChatMessage"] * {
-        color: #31333F !important;
+        color: #ffffff !important;
     }
     /* Kullanıcı/Asistan İkonu */
     .stChatMessage .stAvatar {
-        background-color: #ff4b4b !important;
+        background-color: #1DA1F2 !important; /* Mavi İkon */
         color: white !important;
     }
 
-    /* 4. TABLO İKONLARI (Koyu Renk - Beyaz zeminde görünsün diye) */
+    /* 4. TABLO DÜZENLEMELERİ */
+    [data-testid="stDataFrame"] {
+        background-color: #1c1c1c;
+    }
+    /* Tablo İkonları (Beyaz) */
     [data-testid="stDataFrame"] button {
-        color: #31333F !important; 
+        color: #ffffff !important; 
     }
     [data-testid="stDataFrame"] svg {
-        fill: #31333F !important;
+        fill: #ffffff !important;
     }
 
     /* 5. BUTONLAR */
     .stButton>button {
-        background-color: #ff4b4b;
+        background-color: #1DA1F2; /* Mavi Buton */
         color: white !important;
         border: none;
         font-weight: 600;
         border-radius: 8px;
         padding: 0.5rem 1rem;
-        transition: all 0.3s ease;
     }
     .stButton>button:hover {
-        background-color: #d93b3b;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        background-color: #0d8bd9; /* Hoverda koyu mavi */
     }
 
     /* 6. DEBUG VE HATA KUTULARI */
     .stCode, .stAlert {
-        background-color: #ffffff !important;
-        border: 1px solid #e0e0e0;
-        color: #31333F !important;
+        background-color: #222222 !important;
+        border: 1px solid #444444;
+        color: #ffffff !important;
     }
     
     /* Başlıklar */
     h1, h2, h3 {
-        color: #31333F !important;
-        font-family: 'Helvetica Neue', sans-serif;
+        color: #ffffff !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -220,99 +225,4 @@ def get_gemini_summary(df, prompt):
     return ask_gemini_raw(full_prompt, temperature=0.5)
 
 def run_ga4_report(prop_id, query):
-    client = BetaAnalyticsDataClient(credentials=creds)
-    dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
-    metrics = [{"name": m['name']} for m in query.get('metrics', [])]
-    date_ranges = [query['date_ranges'][0]]
-    
-    req = RunReportRequest(
-        property=f"properties/{prop_id}",
-        dimensions=dimensions,
-        metrics=metrics,
-        date_ranges=date_ranges,
-        limit=query.get('limit', 1000)
-    )
-    res = client.run_report(req)
-    data = []
-    for row in res.rows:
-        item = {}
-        for i, dim in enumerate(dimensions): item[dim['name']] = row.dimension_values[i].value
-        for i, met in enumerate(metrics): 
-            try: item[met['name']] = float(row.metric_values[i].value)
-            except: item[met['name']] = row.metric_values[i].value
-        data.append(item)
-    return pd.DataFrame(data)
-
-# --- ARAYÜZ ---
-with st.sidebar:
-    try: st.image("logo.png", use_container_width=True) 
-    except: st.warning("Logo yok")
-    st.markdown("---")
-    
-    model_name, err = find_best_model()
-    if err: st.error(err)
-    else: st.success(f"🚀 {model_name}")
-
-    df_hierarchy = get_ga4_hierarchy()
-    selected_brand_data = None
-    
-    if not df_hierarchy.empty:
-        # HESAP SEÇİMİ
-        unique_accounts = sorted(df_hierarchy['Account_Name'].unique())
-        selected_account = st.selectbox("📂 Müşteri Seç:", unique_accounts)
-        
-        # MÜLK SEÇİMİ
-        filtered_properties = df_hierarchy[df_hierarchy['Account_Name'] == selected_account]
-        property_list = sorted(filtered_properties['Property_Name'].tolist())
-        selected_property = st.selectbox("📊 Mülk Seç:", property_list)
-        
-        selected_brand_data = filtered_properties[filtered_properties['Property_Name'] == selected_property].iloc[0]
-        st.success(f"✅ {selected_property}")
-        
-        st.markdown("---")
-        if st.button("🗑️ SİSTEMİ SIFIRLA"):
-            st.session_state.clear()
-            st.rerun()
-    else:
-        st.error("Hesap bulunamadı.")
-
-st.subheader("PlanB GA4 Whisperer")
-
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-if prompt := st.chat_input("Bir soru sor..."):
-    if selected_brand_data is None:
-        st.error("Lütfen sol menüden bir Mülk seçin.")
-    else:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Veriler çekiliyor..."):
-                query_json, raw_response = get_gemini_json(prompt)
-                
-                if query_json:
-                    try:
-                        df = run_ga4_report(str(selected_brand_data['GA4_Property_ID']), query_json)
-                        if not df.empty:
-                            summary = get_gemini_summary(df, prompt)
-                            st.markdown(summary)
-                            
-                            # SADECE TABLO
-                            st.dataframe(df, use_container_width=True, hide_index=True)
-                            
-                            st.session_state.messages.append({"role": "assistant", "content": summary})
-                            st.session_state.last_data = df
-                        else:
-                            st.warning("Bu tarih için veri henüz oluşmamış veya '0' dönüyor.")
-                    except Exception as e:
-                        st.error(f"GA4 Hatası: {e}")
-                        with st.expander("Teknik Detay"):
-                             st.json(query_json)
-                else:
-                    st.error("⚠️ AI Soruyu Anlayamadı.")
-                    with st.expander("Debug"):
-                        st.code(raw_response)
+    client = BetaAnalyticsData
