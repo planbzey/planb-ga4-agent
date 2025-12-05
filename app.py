@@ -83,15 +83,25 @@ if "last_prompt" not in st.session_state:
 # --- GRAFİK MOTORU ---
 def auto_visualize(df):
     columns = [c.lower() for c in df.columns]
+    
+    # Eğer Cihaz, Şehir gibi kategorik veriler varsa Pasta Grafiği çizelim
+    categorical_cols = df.select_dtypes(include=['object']).columns
+    if len(categorical_cols) > 0 and 'date' not in columns and 'tarih' not in columns:
+         # İlk kategorik sütunu al (örn: deviceCategory)
+         cat_col = categorical_cols[0]
+         numeric_cols = df.select_dtypes(include=['number']).columns
+         if len(numeric_cols) > 0:
+             st.caption(f"📊 {cat_col} Dağılımı")
+             st.bar_chart(df, x=cat_col, y=numeric_cols[0])
+             return
+
+    # Zaman grafiği kontrolü
     if any(x in columns for x in ['date', 'tarih', 'yearmonth', 'gün', 'day']):
         numeric_cols = df.select_dtypes(include=['number']).columns
         if len(numeric_cols) > 0:
             st.caption("📈 Zaman Grafiği")
             st.line_chart(df, y=numeric_cols)
             return
-    if len(df) > 1 and len(df) < 20:
-        st.caption("📊 Karşılaştırma Grafiği")
-        st.bar_chart(df)
 
 # --- GEMINI & GA4 FONKSİYONLARI ---
 def ask_gemini_raw(prompt_text, temperature=0.0):
@@ -113,16 +123,20 @@ def ask_gemini_raw(prompt_text, temperature=0.0):
 def get_gemini_json(prompt):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
-    # HATA ÇIKARAN KISIM DÜZELTİLDİ:
+    # PROMPT GÜNCELLENDİ: Cihaz ve Metrik tanımları netleştirildi
     sys_prompt = f"""You are a GA4 API expert. TODAY: {today_str}.
 Task: Convert user question to JSON for GA4 report.
 RULES:
 1. Output ONLY valid JSON. No markdown.
-2. Suggest metrics like: totalRevenue, purchaseRevenue, activeUsers, sessions, itemsPurchased.
-Example JSON Structure: 
+2. If user asks for 'devices', 'mobile', 'desktop' -> Use dimension: 'deviceCategory'.
+3. If user asks for 'cities', 'location' -> Use dimension: 'city'.
+4. Always include at least one METRIC (e.g., activeUsers, sessions, totalRevenue).
+5. Always include at least one DIMENSION (e.g., date, deviceCategory, city).
+
+Example JSON: 
 {{
   "date_ranges": [{{"start_date": "30daysAgo", "end_date": "today"}}], 
-  "dimensions": [{{"name": "date"}}], 
+  "dimensions": [{{"name": "deviceCategory"}}], 
   "metrics": [{{"name": "activeUsers"}}]
 }}
 """
@@ -133,7 +147,20 @@ Example JSON Structure:
         if match:
             clean_json = match.group(0)
             parsed = json.loads(clean_json)
-            if "date_ranges" not in parsed: parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
+            
+            # --- EMNİYET KEMERİ (Bug Fix) ---
+            # Eğer boyut (dimension) eksikse tarih ekle
+            if "dimensions" not in parsed or not parsed["dimensions"]:
+                parsed["dimensions"] = [{"name": "date"}]
+            
+            # Eğer metrik (metric) eksikse kullanıcı sayısı ekle
+            if "metrics" not in parsed or not parsed["metrics"]:
+                parsed["metrics"] = [{"name": "activeUsers"}]
+                
+            # Tarih aralığı eksikse bugünü ekle
+            if "date_ranges" not in parsed: 
+                parsed["date_ranges"] = [{"start_date": "today", "end_date": "today"}]
+                
             return parsed, raw_text
         return None, raw_text
     except:
@@ -146,8 +173,16 @@ def get_gemini_summary(df, prompt):
 
 def run_ga4_report(prop_id, query):
     client = BetaAnalyticsDataClient(credentials=creds)
-    dimensions = [{"name": d['name']} for d in query.get('dimensions', [])]
-    metrics = [{"name": m['name']} for m in query.get('metrics', [])]
+    
+    # API'ye boş liste gitmesini engelle
+    dims = query.get('dimensions', [])
+    mets = query.get('metrics', [])
+    
+    if not dims: dims = [{"name": "date"}]
+    if not mets: mets = [{"name": "activeUsers"}]
+
+    dimensions = [{"name": d['name']} for d in dims]
+    metrics = [{"name": m['name']} for m in mets]
     date_ranges = [query['date_ranges'][0]]
     
     req = RunReportRequest(
@@ -216,8 +251,8 @@ col1, col2, col3, col4 = st.columns(4)
 quick_prompt = None
 if col1.button("📅 Dün Durum?"): quick_prompt = "Dünkü toplam kullanıcı, oturum ve geliri getir"
 if col2.button("📉 Son 1 Hafta"): quick_prompt = "Son 7 günün gün gün kullanıcı ve gelir değişimi"
-if col3.button("🌍 Şehirler"): quick_prompt = "Geçen ay en çok gelen ilk 10 şehir"
-if col4.button("📱 Cihazlar"): quick_prompt = "Son 30 günde mobil ve desktop kullanım oranları"
+if col3.button("🌍 Şehirler"): quick_prompt = "Geçen ay en çok gelen ilk 10 şehir (activeUsers)"
+if col4.button("📱 Cihazlar"): quick_prompt = "Son 30 günde mobil ve desktop kullanım oranları (deviceCategory)"
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
